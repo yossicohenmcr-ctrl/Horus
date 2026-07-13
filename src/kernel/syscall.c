@@ -1,21 +1,5 @@
 #include "syscall_internal.h"
 
-void syscall_handler64(void)
-{
-    uint64_t num;
-    __asm__ volatile ("" : "=a"(num)); 
-    switch ((uint32_t)num) {
-        case 0:
-            yield();
-            __asm__ volatile ("" : : "a"(0));
-            break;
-        default:
-            
-            __asm__ volatile ("" : : "a"(-38) );
-            break;
-    }
-}
-
 /* ------------------------------------------------------------------------- *
  *  Per-syscall handlers.
  *

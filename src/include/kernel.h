@@ -703,7 +703,6 @@ void idt_init64(void);
 void pic_init(void);
 void set_tss_kernel_stack(uint64_t kstack_top);
 void cpu_detect_features(void);
-void init_syscall_instruction_path(void);
 void ramfs_init(void);
 int ata_init(void);   /* probe primary master; 1 = ATA disk present, 0 = absent */
 int  ata_read(uint32_t lba, void *buf, uint32_t sectors);

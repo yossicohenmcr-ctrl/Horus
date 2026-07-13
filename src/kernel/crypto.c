@@ -68,24 +68,6 @@ int cpu_has_aesni(void) {
     return (cpu_features_ecx & (1 << 25)) != 0;
 }
 
-static inline void wrmsr(uint32_t msr, uint64_t value) {
-    uint32_t lo = (uint32_t)value;
-    uint32_t hi = (uint32_t)(value >> 32);
-    __asm__ volatile ("wrmsr" : : "c"(msr), "a"(lo), "d"(hi) : "memory");
-}
-
-void init_syscall_instruction_path(void) {
-
-    
-    uint64_t star = ((uint64_t)0x08 << 32) | ((uint64_t)0x10 << 48);
-    wrmsr(0xC0000081, star);
-
-    extern void syscall_entry(void);
-    wrmsr(0xC0000082, (uint64_t)(uintptr_t)&syscall_entry);
-
-    wrmsr(0xC0000084, 0x200ULL); 
-}
-
 void platform_detect(void) {
     for (int i = 0; i < (int)sizeof(platform); i++) ((uint8_t*)&platform)[i] = 0;
 
