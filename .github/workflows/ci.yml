@@ -333,11 +333,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential binutils make \
+            build-essential binutils make gcc-multilib \
             xorriso grub-pc-bin grub-common mtools \
             qemu-system-x86
       - name: Add bare-metal Rust target
         run: rustup target add x86_64-unknown-none
+      # newlib/install is gitignored and built from pinned source by
+      # scripts/build-newlib.sh. Cache it across runs (keyed on the build script)
+      # so it is built once and restored thereafter.
+      - name: Cache the newlib libc build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: newlib/install
+          key: newlib-i686-elf-4.5.0.20241231-${{ hashFiles('scripts/build-newlib.sh') }}
+      - name: Provision newlib (builds on cache miss, no-op on hit)
+        run: make newlib
       - name: Boot NEWLIB_SELFTEST kernel and assert the newlib libc port over the POSIX fd layer works
         run: make smoke-newlib
 
