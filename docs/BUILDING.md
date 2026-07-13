@@ -133,6 +133,24 @@ make userspace       # build all userspace binaries
 
 The kernel image bundles the compiled userspace binaries, so rebuilding after changing userspace requires re-running `make` from the top level.
 
+### newlib libc port
+
+The newlib-linked programs (e.g. `hello_newlib`, exercised by `make smoke-newlib`)
+need a `newlib/install/i686-elf` libc built for the userspace ABI. That tree is
+**gitignored and built on demand** — no cross toolchain is required; newlib is built
+with host `gcc` in freestanding `-m32` mode via thin `i686-elf-*` shims:
+
+```bash
+make newlib          # provision newlib/install (idempotent; skips if already built)
+```
+
+`scripts/build-newlib.sh` fetches a **checksum-pinned** newlib 4.5.0 source, builds
+only the libc target (Horus supplies its own crt0/syscalls, so `libgloss` is neither
+built nor needed), and adds the `stdio64.o` large-file stdio helpers the freestanding
+config otherwise omits. Any newlib-headered compile depends on this automatically, so
+a plain `make smoke-newlib` provisions it if missing. CI caches `newlib/install`
+across runs (keyed on the build script), so it is built once.
+
 ---
 
 ## Rust crate details

@@ -379,16 +379,27 @@ NEWLIB_CFLAGS   = $(USERSPACE_CFLAGS) -I $(NEWLIB_INC)
 NEWLIB_GLUE_OBJS = userspace/newlib_glue.o userspace/newlib_glue64.o \
                    userspace/posix.o userspace/crt0.o
 
-userspace/newlib_glue.o: userspace/newlib_glue.c
+# Provision the newlib libc port on demand (idempotent, checksum-pinned, cached).
+# The install tree (newlib/install) is gitignored and built by
+# scripts/build-newlib.sh — host gcc in freestanding -m32 mode, no cross toolchain.
+# Every newlib-headered compile below takes $(NEWLIB_INC)/stdio.h as an order-only
+# prerequisite, so a missing install is built automatically; `make newlib` builds it
+# explicitly (the smoke-newlib CI job caches newlib/install across runs).
+.PHONY: newlib
+newlib: $(NEWLIB_INC)/stdio.h
+$(NEWLIB_INC)/stdio.h:
+	@$(SHELL) scripts/build-newlib.sh
+
+userspace/newlib_glue.o: userspace/newlib_glue.c | $(NEWLIB_INC)/stdio.h
 	$(CC) $(NEWLIB_CFLAGS) -c $< -o $@
 
-userspace/newlib_glue64.o: userspace/newlib_glue64.c
+userspace/newlib_glue64.o: userspace/newlib_glue64.c | $(NEWLIB_INC)/stdio.h
 	$(CC) $(NEWLIB_CFLAGS) -c $< -o $@
 
 userspace/crt0.o: userspace/crt0.c
 	$(CC) $(USERSPACE_CFLAGS) -c $< -o $@
 
-userspace/hello_newlib.o: userspace/hello_newlib.c
+userspace/hello_newlib.o: userspace/hello_newlib.c | $(NEWLIB_INC)/stdio.h
 	$(CC) $(NEWLIB_CFLAGS) -c $< -o $@
 
 userspace/hello_newlib.pie.elf: userspace/hello_newlib.o $(NEWLIB_GLUE_OBJS) \
