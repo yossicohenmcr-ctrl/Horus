@@ -387,7 +387,7 @@ jobs:
   # flaky tool download reports without reddening the pipeline, and the SBOM
   # step still runs.
   security:
-    name: Security scans + SBOM generation (Semgrep, Trivy, gitleaks, etc.)
+    name: Security scans + SBOM (gitleaks + Semgrep ERROR block; rest advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -411,9 +411,16 @@ jobs:
           rustup target add x86_64-unknown-none
           cargo install cargo-audit || true
 
-      - name: Run security checks (advisory)
+      # BLOCKING gate: committed secrets (gitleaks, full history) and Semgrep
+      # ERROR-severity findings fail the build. Both are verified clean on main;
+      # reviewed false positives live in .gitleaks.toml.
+      - name: Security gate — gitleaks + Semgrep (ERROR) [blocking]
+        run: make security-blocking
+
+      # Advisory scanners: surfaced for review, never fail the build.
+      - name: Security scans — Trivy, cppcheck, flawfinder, cargo-audit [advisory]
         continue-on-error: true
-        run: make security
+        run: make security-advisory
 
       - name: Generate SBOM (CycloneDX via Trivy)
         continue-on-error: true

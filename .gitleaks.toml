@@ -1,0 +1,21 @@
+# gitleaks configuration for Horus.
+#
+# gitleaks runs as a BLOCKING gate in CI (the `security` job) and via
+# `make gitleaks`. This file keeps the default rule set and only allowlists
+# specific, reviewed false positives so the gate stays meaningful.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+HKDF context / domain-separation labels. These are public, hardcoded constants
+that separate one derived key from another (e.g. HKDF(disk_key, salt, \"horus-
+volume-key-v2\")). They are NOT secrets — the security of the scheme depends on
+the disk_key/salt, never on these labels being hidden — but their high entropy
+trips gitleaks' generic-api-key rule. See src/include/kernel.h and
+src/kernel/storage.c.
+"""
+regexes = [
+  '''horus-[a-z0-9-]+-v[0-9]+''',
+]

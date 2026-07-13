@@ -692,13 +692,22 @@ reproducible-build:
 verify-build: reproducible-build
 	@echo "Verify complete."
 
-.PHONY: security security-install semgrep trivy gitleaks cppcheck flawfinder cargo-audit
+.PHONY: security security-blocking security-advisory security-install semgrep trivy gitleaks cppcheck flawfinder cargo-audit
 
-security: semgrep trivy gitleaks cppcheck flawfinder cargo-audit
+# Full local scan: the blocking gates first (so a real finding stops you before
+# the advisory noise), then the advisory scanners.
+security: security-blocking security-advisory
 	@echo ""
 	@echo "✅ Security scan complete."
 	@echo "   Review all output above for findings."
 	@echo "   High-severity issues should be fixed before merging."
+
+# BLOCKING gates (CI fails on these): committed secrets and Semgrep ERROR-level
+# findings. `make gitleaks` and `make semgrep` both exit non-zero on a hit.
+security-blocking: semgrep gitleaks
+
+# Advisory scanners: reported for review but never fail the build.
+security-advisory: trivy cppcheck flawfinder cargo-audit
 
 security-install:
 	@echo "Installing security tools (this may require sudo)..."
@@ -734,7 +743,7 @@ gitleaks:
 		curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v$${GITLEAKS_VERSION}/gitleaks_$${GITLEAKS_VERSION}_linux_x64.tar.gz | \
 		sudo tar -xz -C /usr/local/bin gitleaks \
 	)
-	gitleaks detect --source . --verbose || true
+	gitleaks detect --source . --verbose   # BLOCKING: non-zero exit on any secret (allowlist in .gitleaks.toml)
 
 cppcheck:
 	@echo "=== cppcheck (C static analysis) ==="

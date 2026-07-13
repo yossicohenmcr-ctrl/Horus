@@ -96,7 +96,7 @@ Clean-builds twice with a fixed `SOURCE_DATE_EPOCH` (2021-01-01 UTC) and fails i
 
 ### `make security`
 
-Runs the security scanners (Semgrep, Trivy, gitleaks, cppcheck, flawfinder, `cargo-audit`) and emits a CycloneDX SBOM. Advisory (non-blocking in CI).
+Runs the security scanners (Semgrep, Trivy, gitleaks, cppcheck, flawfinder, `cargo-audit`) and emits a CycloneDX SBOM. Two of them are **blocking gates** in CI (and exit non-zero locally): **gitleaks** (committed secrets, scanned over full git history; reviewed false positives are allowlisted in `.gitleaks.toml`) and **Semgrep at ERROR severity**. The rest (Trivy, cppcheck, flawfinder, `cargo-audit`) are advisory. `make security-blocking` runs just the two gates; `make security-advisory` runs the rest.
 
 ---
 
