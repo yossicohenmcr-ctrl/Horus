@@ -1,0 +1,10 @@
+# Issue-template chooser configuration.
+# Keep a private disclosure path in front of anyone about to file a public issue.
+blank_issues_enabled: true
+contact_links:
+  - name: 🔒 Report a security vulnerability privately
+    url: https://github.com/yossicohenmcr-ctrl/Horus/security/advisories/new
+    about: >-
+      For sensitive vulnerabilities, please open a private GitHub Security
+      Advisory instead of a public issue. This creates a confidential thread
+      with the maintainers rather than disclosing the flaw publicly.

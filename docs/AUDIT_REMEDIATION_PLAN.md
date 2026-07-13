@@ -24,7 +24,7 @@ clone.
 | 1 | **K3** | capability | `cap_lookup` (`src/kernel/capability.c:151-163`): gate the `root_cnode` fallback on an explicit `task==0`; never resolve `slot >= cspace_size` into `root_cnode` (admin `CAP_USER` at slot 6). Closes a latent ring3→ring0 escalation. | C |
 | 2 | **K1** | capability | `lineage_matches` (`rust/src/capability.rs:256`): drop the `c.object == to` clause so revocation follows the derivation tree only; add a regression test for two independent lineages to one shared object. Restores precise revocation. | Rust (existing) |
 | 3 | **M1/M4** | cleanup | Delete dead `syscall_handler64` (`syscall.c:3-17`) and unused `is_user_address_valid` (`paging.c:493`). | C |
-| 4 | **I6/I7** | docs | One source of truth for CI job/test counts (README/SECURITY/LIMITATIONS disagree; GitHub has 17 jobs). Move `docs/security_report.md` → `.github/ISSUE_TEMPLATE/`. | docs |
+| 4 | **I6/I7** | docs | One source of truth for CI job/test counts (README/SECURITY/LIMITATIONS disagreed; CI has 20 jobs, 58 unit tests). TESTS.md is now canonical and `tools/check_doc_counts.sh` gates drift in CI. Moved `docs/security_report.md` → `.github/ISSUE_TEMPLATE/`. | docs |
 | 5 | **I3** | CI | Make gitleaks + Semgrep-ERROR blocking (remove `continue-on-error`/`|| true` for those two). | CI |
 
 ## Larger follow-ups (later weeks)
