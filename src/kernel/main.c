@@ -72,7 +72,6 @@ void kernel_main(uint32_t mb_info) {
     cpu_detect_features();
     cpu_enable_protections();   /* SMEP/SMAP — must follow feature detection */
     entropy_init();
-    init_syscall_instruction_path();
 #ifndef MINIMAL_SECURE
     ramfs_init();   /* -> storage_init(): probes for an ATA disk (persistent) and
                      * falls back to the ephemeral RAM vdisk when none is present */

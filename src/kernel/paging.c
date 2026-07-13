@@ -490,20 +490,6 @@ static bool is_canonical_address(uint64_t addr) {
     return (high_bits == 0) || (high_bits == 0xFFFF);
 }
 
-static bool __attribute__((unused)) is_user_address_valid(uint64_t vaddr) {
-    if (!is_canonical_address(vaddr)) return false;
-    if (vaddr >= 0x0000800000000000ULL) return false; 
-
-    
-    if (vaddr >= USER_AREA_BASE && vaddr < USER_MAX_VADDR) return true;
-
-    
-    if (vaddr >= (ASLR_HIGH_STACK_BASE - USER_HIGH_STACK_WINDOW) &&
-        vaddr < (ASLR_HIGH_STACK_BASE + 0x1000)) return true;
-
-    return false;
-}
-
 #define PT_PHYS_MASK 0x000FFFFFFFFFF000ULL
 
 

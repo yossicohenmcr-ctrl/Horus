@@ -237,32 +237,3 @@ early_exception64:
     cli
     hlt
     jmp .
-
-.global syscall_entry
-syscall_entry:
-    swapgs
-
-    movq %rsp, %r14
-    movq %rcx, %r15
-
-    
-    movabs $current_kernel_stack_top, %rax
-    movq (%rax), %rsp
-    testq %rsp, %rsp
-    jnz 1f
-    movabs $syscall_entry_kstack_top, %rsp   
-1:
-    subq $128, %rsp   
-
-    call syscall_handler64
-
-    movq %r14, %rsp
-    movq %r15, %rcx
-
-    sysretq
-
-.section .bss
-.align 16
-syscall_entry_kstack_bottom:
-    .space 4096
-syscall_entry_kstack_top:
