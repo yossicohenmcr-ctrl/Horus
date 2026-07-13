@@ -1,5 +1,5 @@
 use core::ptr;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -49,26 +49,43 @@ const MIN_DERIVED_SERIAL: u32 = 0x00010000;
 
 
 
-// Single source of truth for per-object lineage generations.
+// Single source of truth for per-object lineage generations — EXACT identity.
 //
-// This table is the *authority* for revocation/use-after-revoke detection.
-// The C side no longer keeps its own `lineages[]` table; it delegates every
-// generation check and bump through the `rust_lineage_check` / `rust_lineage_bump`
-// FFI below. Keeping a single table eliminates the C/Rust desync that allowed a
-// stale derived capability to pass one check while the other had been bumped.
+// This table is the *authority* for revocation/use-after-revoke detection. The
+// C side keeps no `lineages[]` table of its own; it delegates every generation
+// check and bump through `rust_lineage_check` / `rust_lineage_bump`, so the two
+// languages cannot desync (which previously let a stale derived capability pass
+// one check while the other had been bumped).
 //
-// Each slot is an independent atomic so accesses are sound under future
-// preemption / SMP. On the current single-core cooperative kernel the atomics
-// compile down to plain loads/stores plus a `lock`-prefixed add.
-const LINEAGE_SLOTS: usize = 4096;
+// It is an open-addressing hash map keyed by the FULL 64-bit object id, with
+// linear probing. The earlier design was a bare 4096-entry counter array
+// indexed by a hash of the object with NO key stored, so two distinct objects
+// whose hashes collided shared a generation counter — revoking one then
+// spuriously invalidated the other (fail-closed, but wrong). Storing the key
+// makes lineages exact: distinct objects never share a counter (K2).
+//
+// `object` ids come from reused physical-resource spaces (frame phys-addrs,
+// endpoint / task / storage ids), so the number of *distinct* live keys is
+// bounded by those resources — not by uptime — and stays far below the table
+// size. Empty slots hold key 0 (which is also the "no object" sentinel, never a
+// real key), and since entries are never deleted, the first empty slot on a
+// probe chain means "not present". Generation 0 means "untracked".
+//
+// Every access runs under the C `cap_lock`, so the atomics are only for
+// SMP-readiness; the map is not otherwise lock-free.
+const LINEAGE_SLOTS: usize = 16384; // power of two; exceeds max distinct live objects
 #[allow(clippy::declare_interior_mutable_const)]
-const LINEAGE_ZERO: AtomicU32 = AtomicU32::new(0);
-static LINEAGE_GEN: [AtomicU32; LINEAGE_SLOTS] = [LINEAGE_ZERO; LINEAGE_SLOTS];
-
-
+const LINEAGE_KEY_ZERO: AtomicU64 = AtomicU64::new(0);
+#[allow(clippy::declare_interior_mutable_const)]
+const LINEAGE_GEN_ZERO: AtomicU32 = AtomicU32::new(0);
+/// Slot keys (0 == empty). Parallel to `LINEAGE_GEN`.
+static LINEAGE_KEY: [AtomicU64; LINEAGE_SLOTS] = [LINEAGE_KEY_ZERO; LINEAGE_SLOTS];
+/// Slot generations (0 == untracked). Parallel to `LINEAGE_KEY`.
+static LINEAGE_GEN: [AtomicU32; LINEAGE_SLOTS] = [LINEAGE_GEN_ZERO; LINEAGE_SLOTS];
 
 #[inline]
-fn lineage_idx(obj: u64) -> usize {
+fn lineage_home(obj: u64) -> usize {
+    // SplitMix64 finalizer, masked to the table size.
     let mut x = obj;
     x ^= x >> 30;
     x = x.wrapping_mul(0xbf58476d1ce4e5b9);
@@ -78,18 +95,69 @@ fn lineage_idx(obj: u64) -> usize {
     (x as usize) & (LINEAGE_SLOTS - 1)
 }
 
+/// Return the slot holding `obj`, or None if `obj` was never inserted. Probes
+/// linearly from the home index and stops at the first empty slot — sound
+/// because entries are never deleted, so an empty slot ends the chain.
+#[inline]
+fn lineage_find(obj: u64) -> Option<usize> {
+    let home = lineage_home(obj);
+    for step in 0..LINEAGE_SLOTS {
+        let i = (home + step) & (LINEAGE_SLOTS - 1);
+        let k = LINEAGE_KEY[i].load(Ordering::SeqCst);
+        if k == obj {
+            return Some(i);
+        }
+        if k == 0 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Return `obj`'s slot, inserting it (generation left at 0) if absent. Returns
+/// None only if the table is entirely full of *other* keys — impossible for the
+/// bounded, reused object space in practice; callers degrade fail-closed.
+#[inline]
+fn lineage_find_or_insert(obj: u64) -> Option<usize> {
+    let home = lineage_home(obj);
+    for step in 0..LINEAGE_SLOTS {
+        let i = (home + step) & (LINEAGE_SLOTS - 1);
+        let k = LINEAGE_KEY[i].load(Ordering::SeqCst);
+        if k == obj {
+            return Some(i);
+        }
+        if k == 0 {
+            // Claim the empty slot. Under cap_lock this never races; the CAS is
+            // for SMP-safety. If we lose to a concurrent insert of the same key,
+            // this is still our slot; if to a different key, keep probing.
+            match LINEAGE_KEY[i].compare_exchange(0, obj, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(i),
+                Err(k2) if k2 == obj => return Some(i),
+                Err(_) => continue,
+            }
+        }
+    }
+    None
+}
+
 /// Bump the generation for `obj`, invalidating every capability minted against
 /// the previous generation. Returns the new generation. Generation 0 is reserved
 /// to mean "untracked", so we skip it on wrap-around.
 #[inline]
 fn bump_lineage(obj: u64) -> u32 {
-    if obj == 0 { return 0; }
-    let idx = lineage_idx(obj);
-    let prev = LINEAGE_GEN[idx].fetch_add(1, Ordering::SeqCst);
+    if obj == 0 {
+        return 0;
+    }
+    // On the (practically unreachable) full-table case, degrade to the home slot:
+    // fail-closed — it may over-invalidate an unrelated object but never leaves a
+    // revoked one valid, and the structural sweep (revoke_subtree) has already
+    // done the authoritative work.
+    let i = lineage_find_or_insert(obj).unwrap_or_else(|| lineage_home(obj));
+    let prev = LINEAGE_GEN[i].fetch_add(1, Ordering::SeqCst);
     let g = prev.wrapping_add(1);
     if g == 0 {
         // Wrapped back onto the reserved "untracked" value; force to 1.
-        LINEAGE_GEN[idx].store(1, Ordering::SeqCst);
+        LINEAGE_GEN[i].store(1, Ordering::SeqCst);
         1
     } else {
         g
@@ -98,11 +166,17 @@ fn bump_lineage(obj: u64) -> u32 {
 
 /// Authoritative validity check: is a capability that recorded `gen` for `obj`
 /// still live? A cap is stale only when the lineage is tracked (`cg != 0`), the
-/// cap carries a concrete generation (`gen != 0`), and they disagree.
+/// cap carries a concrete generation (`gen != 0`), and they disagree. An object
+/// with no table entry is untracked (`cg == 0`) and therefore valid.
 #[inline]
 fn lineage_check(obj: u64, gen: u32) -> bool {
-    if obj == 0 { return true; }
-    let cg = LINEAGE_GEN[lineage_idx(obj)].load(Ordering::SeqCst);
+    if obj == 0 {
+        return true;
+    }
+    let cg = match lineage_find(obj) {
+        Some(i) => LINEAGE_GEN[i].load(Ordering::SeqCst),
+        None => 0,
+    };
     !(cg != 0 && gen != 0 && gen != cg)
 }
 
@@ -223,8 +297,12 @@ pub unsafe extern "C" fn rust_cap_mint(
     };
     if src.object != 0 {
         // Adopt the parent's generation as the floor for this lineage so the
-        // authority never lags behind a legitimately-minted capability.
-        LINEAGE_GEN[lineage_idx(src.object)].fetch_max(src.generation, Ordering::SeqCst);
+        // authority never lags behind a legitimately-minted capability. Skip
+        // silently if the table is full (best-effort; the cap still works and
+        // the structural sweep remains authoritative).
+        if let Some(i) = lineage_find_or_insert(src.object) {
+            LINEAGE_GEN[i].fetch_max(src.generation, Ordering::SeqCst);
+        }
     }
     true
 }
@@ -881,10 +959,11 @@ mod tests {
     /// use-after-revoke is prevented even across the counter wrap.
     #[test]
     fn test_lineage_generation_wraparound() {
-        let obj = 0xA5A5_0001u64; // unique object -> its own lineage slot
-        let idx = lineage_idx(obj);
-        // Drive the slot to the wrap boundary directly (a 4-billion-bump loop
-        // would be absurd); the store mirrors a counter about to overflow.
+        let obj = 0xA5A5_0001u64; // unique object -> its own keyed slot
+        // Insert obj, then drive ITS slot to the wrap boundary directly (a
+        // 4-billion-bump loop would be absurd); the store mirrors a counter
+        // about to overflow.
+        let idx = lineage_find_or_insert(obj).expect("lineage table has room");
         LINEAGE_GEN[idx].store(u32::MAX, core::sync::atomic::Ordering::SeqCst);
 
         // A capability minted at the pre-wrap generation is valid right now.
@@ -902,6 +981,55 @@ mod tests {
         // passes by design (the untracked sentinel).
         assert!(lineage_check(obj, 1));
         assert!(lineage_check(obj, 0));
+    }
+
+    /// K2 regression: two DISTINCT objects that hash to the same home bucket
+    /// must keep independent generations. The old bare-hash table aliased them —
+    /// revoking one spuriously invalidated the other. Find a real home-bucket
+    /// collision, then prove a bump of one leaves the other untouched.
+    #[test]
+    fn test_lineage_exact_identity_no_hash_alias() {
+        // Find two distinct objects sharing a home bucket (birthday paradox over
+        // 16384 buckets makes this appear within ~150 samples; 1024 is ample).
+        let mut seen: [(usize, u64); 1024] = [(usize::MAX, 0); 1024];
+        let mut n = 0usize;
+        let (mut a, mut b) = (0u64, 0u64);
+        let mut x = 1u64;
+        while n < seen.len() {
+            let obj = x.wrapping_mul(0x9E3779B97F4A7C15) | 1; // distinct, nonzero
+            let h = lineage_home(obj);
+            let mut collided = false;
+            for e in seen.iter().take(n) {
+                if e.0 == h && e.1 != obj {
+                    a = e.1;
+                    b = obj;
+                    collided = true;
+                    break;
+                }
+            }
+            if collided {
+                break;
+            }
+            seen[n] = (h, obj);
+            n += 1;
+            x += 1;
+        }
+        assert!(a != 0 && b != 0, "expected a home-bucket collision within budget");
+        assert_eq!(lineage_home(a), lineage_home(b), "a and b share a home bucket");
+        assert_ne!(a, b);
+
+        // Track b at a concrete generation, then revoke a (bump it) twice.
+        let gb = bump_lineage(b); // b -> gen 1
+        let _ = bump_lineage(a); // a -> some gen
+        let _ = bump_lineage(a); // a -> next gen
+
+        // b's capability at gb is STILL valid — a's revocations never touched it.
+        assert!(
+            lineage_check(b, gb),
+            "an object sharing a hash bucket must be unaffected by another's revocation"
+        );
+        // And b really is tracked independently (its own slot, its own gen).
+        assert!(!lineage_check(b, gb.wrapping_add(1)), "b's own generation is exact");
     }
 
     /// `rust_cap_revoke_by_values` is the explicit-values, single-cspace revoke

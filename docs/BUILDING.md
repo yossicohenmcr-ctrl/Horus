@@ -71,7 +71,7 @@ Removes compiled objects, the Rust build cache, and `tools/mkheadered`. Does not
 
 ### `make test`
 
-Runs the Rust unit tests (61 across the security core — see [TESTS.md](../TESTS.md)), then does a clean full build to verify compilation.
+Runs the Rust unit tests (62 across the security core — see [TESTS.md](../TESTS.md)), then does a clean full build to verify compilation.
 
 ### Headless self-test targets
 

@@ -29,9 +29,12 @@ typedef uint64_t vaddr_t;
 #define KERNEL_RESERVED_CAPS    4
 #define MAX_REV_SETS            8
 
-/* Number of lineage slots. Mirrors LINEAGE_SLOTS in rust/src/capability.rs,
- * which is the authoritative table; keep these two in sync. */
-#define MAX_LINEAGES            4096
+/* Capacity of the per-object lineage-generation map. Mirrors LINEAGE_SLOTS in
+ * rust/src/capability.rs, which is the authoritative table (an exact,
+ * key-storing open-addressing map — not a bare hash); keep these two in sync.
+ * The C side does not use this constant directly (it delegates every lineage
+ * op through rust_lineage_check / rust_lineage_bump); it is kept for reference. */
+#define MAX_LINEAGES            16384
 #define USER_VIRT_BASE          0x0000000000400000ULL
 #define USER_MAX_VADDR          0x0000000000800000ULL
 #define USER_AREA_BASE          0x400000ULL
