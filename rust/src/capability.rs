@@ -38,6 +38,9 @@ const _: () = {
 
 const CNODE_SIZE: u32 = 256;
 const KERNEL_RESERVED_CAPS: u32 = 4;
+/// Mirror of `MAX_TASKS` in src/include/kernel.h. Only used to size the
+/// revocation worklist below; kept in sync with the C constant.
+const MAX_TASKS: usize = 64;
 
 
 const MIN_DERIVED_SERIAL: u32 = 0x00010000;
@@ -248,49 +251,89 @@ unsafe fn nullify(c: &mut Capability) {
     c.generation = 0;
 }
 
-/// Lineage match predicate: does capability `c` belong to the revoked lineage
-/// identified by (serial, badge, object)? A derived capability records its
-/// parent's serial in its `badge`, so matching either field on serial/badge —
-/// or matching the underlying object — catches every descendant copy.
-#[inline]
-fn lineage_matches(c: &Capability, ts: u32, tb: u32, to: u64) -> bool {
-    (ts != 0 && (c.serial == ts || c.badge == ts))
-        || (tb != 0 && (c.serial == tb || c.badge == tb))
-        || (to != 0 && c.object == to)
-}
+// ---------------------------------------------------------------------------
+// Transitive (precise) revocation.
+//
+// A derived capability records its *immediate* parent's serial in its `badge`
+// (see `rust_cap_mint`: `badge: parent_serial`). The derivation relation is
+// therefore a forest of parent-serial links, and revoking a capability means
+// nulling exactly the subtree rooted at it — its children, grandchildren, and
+// deeper — and nothing else.
+//
+// The old sweep matched by (serial | badge | object): matching `object` also
+// caught unrelated capabilities that merely shared the same kernel object, and
+// matching the target's own `badge` also caught its parent (an ancestor) and
+// its siblings. That was both over-broad (K1) and the only thing that reached
+// grandchildren (whose badge is the *child's* serial, not the target's). The
+// walk below is precise AND transitive: it follows the real parent-serial links
+// to a fixpoint, so ancestors, siblings, and independent same-object caps are
+// left intact while every genuine descendant is revoked.
+// ---------------------------------------------------------------------------
 
-/// Null every capability in one cspace that matches the target lineage,
-/// skipping `skip_slot` (pass `u32::MAX` to skip none). Decrements
-/// `*caps_in_use` once per nulled cap when the pointer is non-null.
+/// Scratch worklist for the transitive revocation walk, holding the serials of
+/// capabilities whose children still need to be swept. Every revocation entry
+/// point is called by C under `cap_lock`, so a single static buffer is sound on
+/// the cooperative single-core kernel. Sized to the largest number of live caps
+/// the system can hold — `MAX_TASKS` cspaces of `CNODE_SIZE` plus the kernel
+/// root cnode — which bounds the length of any derivation chain, so the worklist
+/// can never overflow.
+const REVOKE_SCRATCH_CAP: usize = MAX_TASKS * CNODE_SIZE as usize + CNODE_SIZE as usize;
+static mut REVOKE_WORKLIST: [u32; REVOKE_SCRATCH_CAP] = [0; REVOKE_SCRATCH_CAP];
+
+/// Transitively revoke the derivation subtree rooted at `seed_serial`, sweeping
+/// every cspace in `spaces`. The seed capability itself must already be nulled
+/// by the caller; this walks the `badge == parent.serial` links to null every
+/// descendant while leaving ancestors, siblings, and independent capabilities
+/// that merely share the same object untouched. Decrements each space's
+/// `caps_in_use` once per nulled cap when that pointer is non-null.
 ///
-/// INVARIANT: this is the single mechanism by which a cspace is swept for a
-/// revoked lineage; `rust_cap_revoke` and `rust_cap_revoke_global` both go
-/// through it so their matching semantics can never drift apart.
-unsafe fn revoke_matching_in(
-    cspace: *mut Capability,
-    size: u32,
-    skip_slot: u32,
-    ts: u32,
-    tb: u32,
-    to: u64,
-    caps_in_use: *mut u32,
-) {
-    if cspace.is_null() {
+/// INVARIANT: this is the single mechanism by which the subtree is swept;
+/// `rust_cap_revoke`, `rust_cap_revoke_global`, and `rust_cap_revoke_by_values`
+/// all go through it so their matching semantics can never drift apart.
+unsafe fn revoke_subtree(spaces: *const CSpaceDesc, space_count: u32, seed_serial: u32) {
+    if seed_serial == 0 || spaces.is_null() {
         return;
     }
-    let limit = if size > CNODE_SIZE { CNODE_SIZE } else { size };
-    for i in 0..limit {
-        if i == skip_slot {
-            continue;
-        }
-        let c = &mut *cspace.add(i as usize);
-        if c.typ == CAP_NULL {
-            continue;
-        }
-        if lineage_matches(c, ts, tb, to) {
-            nullify(c);
-            if !caps_in_use.is_null() && *caps_in_use > 0 {
-                *caps_in_use -= 1;
+    // A serial of 0 means "no parent" (a primordial/root cap), so a stored 0 in
+    // a badge never links to anything and is skipped below.
+    let worklist = &mut *ptr::addr_of_mut!(REVOKE_WORKLIST);
+    let mut head = 0usize;
+    let mut tail = 0usize;
+    worklist[tail] = seed_serial;
+    tail += 1;
+
+    while head < tail {
+        let parent_serial = worklist[head];
+        head += 1;
+        for s in 0..space_count {
+            let d = &*spaces.add(s as usize);
+            if d.caps.is_null() {
+                continue;
+            }
+            let limit = if d.size > CNODE_SIZE { CNODE_SIZE } else { d.size };
+            for i in 0..limit {
+                let c = &mut *d.caps.add(i as usize);
+                if c.typ == CAP_NULL {
+                    continue;
+                }
+                // Match only the direct parent-serial link. Serials are unique,
+                // so this identifies children of `parent_serial` and nothing
+                // else — no ancestor, sibling, or same-object false positives.
+                if c.badge != 0 && c.badge == parent_serial {
+                    let child_serial = c.serial;
+                    nullify(c);
+                    if !d.caps_in_use.is_null() && *d.caps_in_use > 0 {
+                        *d.caps_in_use -= 1;
+                    }
+                    // Enqueue the child so its own descendants are swept too.
+                    // Bounded: each live cap is nulled (and thus enqueued) at
+                    // most once, and the worklist is sized to the total cap
+                    // count, so the guard can never actually drop a real entry.
+                    if child_serial != 0 && tail < REVOKE_SCRATCH_CAP {
+                        worklist[tail] = child_serial;
+                        tail += 1;
+                    }
+                }
             }
         }
     }
@@ -327,17 +370,22 @@ pub unsafe extern "C" fn rust_cap_revoke(
     }
 
     let ts = target.serial;
-    let tb = target.badge;
     let to = target.object;
 
     nullify(target);
 
-    // Single source of truth: bump the object's lineage generation once.
+    // Single source of truth: bump the object's lineage generation once. This is
+    // defense-in-depth against a snapshot escaping the structural sweep (TOCTOU);
+    // its object-granularity is tracked separately (K2) and does not touch the
+    // untracked gen-0 caps the structural walk below handles precisely.
     if to != 0 {
         let _ = bump_lineage(to);
     }
 
-    revoke_matching_in(cspace, cspace_size, slot, ts, tb, to, core::ptr::null_mut());
+    // Precisely null the derivation subtree: the target's children, their
+    // children, and so on — following the badge parent-serial links.
+    let spaces = [CSpaceDesc { caps: cspace, size: cspace_size, caps_in_use: ptr::null_mut() }];
+    revoke_subtree(spaces.as_ptr(), 1, ts);
     true
 }
 
@@ -394,34 +442,36 @@ pub unsafe extern "C" fn rust_cap_revoke_global(
     }
 
     let ts = target.serial;
-    let tb = target.badge;
     let to = target.object;
 
     // Null the target itself and account for it. The system-wide sweep below
-    // will skip it (already null), so it is never double-counted.
+    // walks from the target's serial and only matches descendants, so the
+    // already-null target can never re-match and is never double-counted.
     nullify(target);
     if !target_caps_in_use.is_null() && *target_caps_in_use > 0 {
         *target_caps_in_use -= 1;
     }
 
-    // Single source of truth: bump the object's lineage generation once.
+    // Single source of truth: bump the object's lineage generation once (see the
+    // note in `rust_cap_revoke`).
     if to != 0 {
         let _ = bump_lineage(to);
     }
 
-    // Sweep every supplied cspace, including the target's own (target slot is
-    // already null, so it cannot re-match).
-    if !spaces.is_null() {
-        for s in 0..space_count {
-            let d = &*spaces.add(s as usize);
-            revoke_matching_in(d.caps, d.size, u32::MAX, ts, tb, to, d.caps_in_use);
-        }
-    }
+    // Transitively null the derivation subtree across every supplied cspace. The
+    // target's own cspace is among them; its slot is already null, so it cannot
+    // re-match.
+    revoke_subtree(spaces, space_count, ts);
     true
 }
 
-/// Single-cspace revoke by explicit values. Retained for compatibility; the
-/// system-wide path is `rust_cap_revoke_global`.
+/// Single-cspace revoke by explicit values, behind the IPC snapshot/revalidate
+/// (TOCTOU) guard. Nulls the capability identified by `target_serial` and its
+/// derivation subtree within this one cspace, and bumps the object's lineage so
+/// a snapshot taken before the revoke fails a generation re-check at point of
+/// use. `target_badge` is retained for ABI stability (the C header declares it)
+/// but is no longer used for matching — lineage is now followed precisely by the
+/// parent-serial links, not by a badge/object broad match.
 #[no_mangle]
 pub unsafe extern "C" fn rust_cap_revoke_by_values(
     cspace: *mut Capability,
@@ -430,6 +480,7 @@ pub unsafe extern "C" fn rust_cap_revoke_by_values(
     target_badge: u32,
     target_obj: u64,
 ) -> bool {
+    let _ = target_badge;
     if cspace.is_null() {
         return false;
     }
@@ -437,15 +488,19 @@ pub unsafe extern "C" fn rust_cap_revoke_by_values(
     if target_obj != 0 {
         let _ = bump_lineage(target_obj);
     }
-    revoke_matching_in(
-        cspace,
-        cspace_size,
-        u32::MAX,
-        target_serial,
-        target_badge,
-        target_obj,
-        core::ptr::null_mut(),
-    );
+    // Null the exact capability named by serial, then transitively revoke its
+    // derivation subtree in this cspace.
+    if target_serial != 0 {
+        let limit = if cspace_size > CNODE_SIZE { CNODE_SIZE } else { cspace_size };
+        for i in 0..limit {
+            let c = &mut *cspace.add(i as usize);
+            if c.typ != CAP_NULL && c.serial == target_serial {
+                nullify(c);
+            }
+        }
+        let spaces = [CSpaceDesc { caps: cspace, size: cspace_size, caps_in_use: ptr::null_mut() }];
+        revoke_subtree(spaces.as_ptr(), 1, target_serial);
+    }
     true
 }
 
@@ -553,6 +608,92 @@ mod tests {
             assert!(!rust_cap_lookup(b.as_mut_ptr(), 16, 7, 0x1).is_null(),
                 "unrelated capability must not be revoked");
             assert_eq!(ciu_b, 1);
+        }
+    }
+
+    /// TRANSITIVE revocation across >1 generation: root -> child -> grandchild.
+    /// Revoking the root must null the grandchild too. The grandchild's badge is
+    /// its *immediate* parent's serial (not the root's), so this only works if
+    /// revocation reaches beyond direct children.
+    #[test]
+    fn test_transitive_revoke_reaches_grandchild() {
+        let obj = 0xB1B2_0001u64; // unique object -> own lineage slot
+        let mut cs = [cap(0, 0, 0, 0, 0, 0); 16];
+        cs[4] = cap(1, 0x3f, obj, 0, 0x5000, 0); // root
+        let mut next = 0x9000u32;
+        unsafe {
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 5, 4, 0x3f, &mut next, 0)); // child
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 6, 5, 0x3f, &mut next, 0)); // grandchild
+            // The grandchild links to its immediate parent (child), not the root.
+            assert_eq!(cs[6].badge, cs[5].serial);
+            assert_ne!(cs[6].badge, cs[4].serial);
+
+            assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 4, core::ptr::null_mut()));
+            assert_eq!(cs[4].typ, CAP_NULL, "root revoked");
+            assert_eq!(cs[5].typ, CAP_NULL, "child revoked");
+            assert_eq!(cs[6].typ, CAP_NULL,
+                "grandchild must be revoked transitively (>1 generation)");
+        }
+    }
+
+    /// PRECISION (K1): two INDEPENDENT derivation trees over the *same* kernel
+    /// object must not interfere. Revoking one root leaves the other tree wholly
+    /// intact. The old object-match sweep nulled every cap sharing the object;
+    /// the transitive walk follows lineage links, so the second tree survives.
+    /// Uses untracked (gen-0) caps — the realistic frame-cap case — so the
+    /// object-granular lineage bump does not mask the structural precision.
+    #[test]
+    fn test_independent_same_object_survives() {
+        let obj = 0xC1C2_0001u64; // one shared object, two unrelated trees
+        let mut cs = [cap(0, 0, 0, 0, 0, 0); 16];
+        cs[4] = cap(1, 0x3f, obj, 0, 0x6000, 0); // tree A root
+        cs[8] = cap(1, 0x3f, obj, 0, 0x7000, 0); // tree B root (independent)
+        let mut next = 0xA000u32;
+        unsafe {
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 5, 4, 0x3f, &mut next, 0)); // A child
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 9, 8, 0x3f, &mut next, 0)); // B child
+
+            // Revoke tree A's root only.
+            assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 4, core::ptr::null_mut()));
+            assert_eq!(cs[4].typ, CAP_NULL, "A root revoked");
+            assert_eq!(cs[5].typ, CAP_NULL, "A child revoked");
+
+            // Tree B — same object, unrelated lineage — is untouched.
+            assert_ne!(cs[8].typ, CAP_NULL,
+                "independent same-object root must survive");
+            assert_ne!(cs[9].typ, CAP_NULL,
+                "independent same-object child must survive");
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 8, 0x1).is_null());
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 9, 0x1).is_null());
+        }
+    }
+
+    /// PRECISION (K1): revoking one child must NOT take out its siblings or its
+    /// parent. Under the old sweep the target's badge (== parent serial) matched
+    /// both the parent (serial == badge) and every sibling (badge == badge); the
+    /// transitive walk seeds from the *child's* serial, so neither is touched.
+    #[test]
+    fn test_sibling_and_parent_survive() {
+        let obj = 0xD1D2_0001u64;
+        let mut cs = [cap(0, 0, 0, 0, 0, 0); 16];
+        cs[4] = cap(1, 0x3f, obj, 0, 0x8000, 0); // parent
+        let mut next = 0xB000u32;
+        unsafe {
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 5, 4, 0x3f, &mut next, 0)); // child 1
+            assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 6, 4, 0x3f, &mut next, 0)); // child 2 (sibling)
+            // Siblings share the parent's serial as their badge.
+            assert_eq!(cs[5].badge, cs[4].serial);
+            assert_eq!(cs[6].badge, cs[4].serial);
+
+            // Revoke only child 1.
+            assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 5, core::ptr::null_mut()));
+            assert_eq!(cs[5].typ, CAP_NULL, "child 1 revoked");
+
+            // The sibling and the parent must both survive.
+            assert_ne!(cs[6].typ, CAP_NULL, "sibling must survive");
+            assert_ne!(cs[4].typ, CAP_NULL, "parent (ancestor) must survive");
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 6, 0x1).is_null());
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 4, 0x1).is_null());
         }
     }
 
