@@ -148,16 +148,41 @@ int cap_install_from_root(int pid, uint32_t slot, uint32_t root_slot, uint32_t o
     return 0;
 }
 
+/*
+ * Resolve a capability slot for the current task, fail-closed.
+ *
+ * The root_cnode fallback is KERNEL-ONLY. Every non-kernel task resolves
+ * strictly within its OWN cspace; a slot at or beyond the task's cspace size
+ * returns NULL rather than silently falling through to root_cnode, which holds
+ * admin authority (CAP_USER at slot 6, CAP_ENCRYPTED_STORAGE at slot 9). The
+ * previous form (`cspace && slot < cspace_sz` else root_cnode) let ANY task with
+ * a cspace smaller than the requested slot resolve that slot against root_cnode
+ * — a latent ring-3 -> ring-0 escalation the instant a task is ever created with
+ * cspace_size < CNODE_SIZE. Only the kernel boot task (id 0) legitimately has no
+ * cspace and may reach root_cnode; this mirrors caller_has_authority()'s
+ * no-ambient-authority guard for the mutating ops.
+ */
 struct capability *cap_lookup(uint32_t slot, uint32_t required_rights) {
     if (slot >= CNODE_SIZE) return NULL;
-    struct capability *cspace = tasks[get_current_task()].cspace;
-    uint32_t cspace_sz = tasks[get_current_task()].cspace_size ? tasks[get_current_task()].cspace_size : CNODE_SIZE;
-    struct capability *p = NULL;
-    if (cspace && slot < cspace_sz) {
+
+    int cur = get_current_task();
+    if (cur < 0 || cur >= MAX_TASKS) return NULL;
+
+    struct capability *cspace = tasks[cur].cspace;
+    uint32_t cspace_sz = tasks[cur].cspace_size ? tasks[cur].cspace_size : CNODE_SIZE;
+    struct capability *p;
+
+    if (cspace) {
+        /* Own cspace only — an out-of-range slot fails closed, never root_cnode. */
+        if (slot >= cspace_sz) return NULL;
         p = rust_cap_lookup(cspace, cspace_sz, slot, required_rights);
     } else {
+        /* A cspace-less task is the kernel boot task (id 0) or is missing its
+         * cspace; only the former may resolve against the kernel root cnode. */
+        if (cur != 0) return NULL;
         p = rust_cap_lookup(root_cnode, CNODE_SIZE, slot, required_rights);
     }
+
     if (p && !capability_validate_generation(p)) return NULL;
     return p;
 }
