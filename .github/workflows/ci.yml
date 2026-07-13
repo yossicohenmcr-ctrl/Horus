@@ -33,6 +33,8 @@ jobs:
         run: cargo test --manifest-path rust/Cargo.toml --release
       - name: Clippy — all targets, deny every warning
         run: cargo clippy --manifest-path rust/Cargo.toml --release --all-targets -- -D warnings
+      - name: Doc-count guard (test/CI-job counts match the docs)
+        run: tools/check_doc_counts.sh
 
   kernel:
     name: Build kernel.elf + bootable ISO (x86_64)

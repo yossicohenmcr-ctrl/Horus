@@ -22,7 +22,7 @@ Templates:
 | File | Contents |
 |---|---|
 | [pull_request_template.md](pull_request_template.md) | PR description + security-impact checklist |
-| [security_report.md](security_report.md) | Security-issue report template |
+| [.github/ISSUE_TEMPLATE/security_report.md](../.github/ISSUE_TEMPLATE/security_report.md) | Security-issue report template (surfaced in the GitHub "New issue" chooser) |
 
 Project-level documents (at the repository root):
 
@@ -30,6 +30,6 @@ Project-level documents (at the repository root):
 |---|---|
 | [README.md](../README.md) | Build quick start, status-at-a-glance table, project overview |
 | [SECURITY.md](../SECURITY.md) | Security policy, current posture, hardening in place, reporting |
-| [TESTS.md](../TESTS.md) | Test coverage today (58 Rust unit tests, 11 CI jobs) and what is still needed |
+| [TESTS.md](../TESTS.md) | Test coverage today (58 Rust unit tests, 20 CI jobs) and what is still needed — the source of truth for both counts |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up and submit work |
 | [CHANGES.md](../CHANGES.md) | Changelog (`main` branch state) |
