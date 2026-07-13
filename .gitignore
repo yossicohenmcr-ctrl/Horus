@@ -106,3 +106,8 @@ horus_usage.log
 
 # Generated program-image byte arrays for PROC_SELFTEST (execve-from-fd)
 userspace/*_image.h
+
+# AI-assistant virtualenv (local dev only, never committed)
+aider/
+# extra reproducible-build hash sidecars
+.build*.sha
