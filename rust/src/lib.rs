@@ -22,6 +22,8 @@ mod memory;
 mod ps;
 mod rng;
 mod sha256;
+mod sha512;
+mod ed25519;
 
 #[cfg(not(test))]
 #[panic_handler]

@@ -65,6 +65,13 @@ void kernel_main(uint32_t mb_info) {
 
     terminal_init();
 
+#ifdef VBOOT_SELFTEST
+    /* Runtime boot-integrity gate: verify the signed manifest against the
+     * embedded Ed25519 anchor before proceeding. Noreturn — prints its marker
+     * and halts (a real reject must not continue). See verified_boot.c. */
+    verified_boot_selftest();
+#endif
+
     idt_init64();
     pic_init();
     paging_init();

@@ -705,6 +705,18 @@ bool     rust_signal_handler_addr_ok(uint32_t vaddr);
 /* Centralized capability serial allocation (wrap logic lives in Rust). */
 uint32_t rust_cap_alloc_serial(uint32_t *next_serial);
 
+/* Ed25519 signature verification (rust/src/ed25519.rs), for verified boot.
+ * Returns 1 iff `sig` (64 bytes: R||S) is a valid signature by `public_key`
+ * (32 bytes) over `msg[0..msg_len]`. Verify-only: the kernel never signs. */
+int rust_ed25519_verify(const uint8_t *public_key, const uint8_t *sig,
+                        const uint8_t *msg, size_t msg_len);
+#ifdef VBOOT_SELFTEST
+/* Verified-boot self-test (verified_boot.c): verify a signed manifest against an
+ * embedded Ed25519 public key and prove the enforce-or-halt boot gate. Prints a
+ * marker and halts. See docs/BOOT_INTEGRITY.md. */
+void verified_boot_selftest(void) __attribute__((noreturn));
+#endif
+
 void terminal_init(void);
 void clear_screen(void);
 void print_blanks(int n);

@@ -19,9 +19,19 @@ name: Release
 # rebuild the identical kernel.elf from the tagged commit AND confirm the
 # published binary carries provenance from this repo's pipeline.
 #
-# The REMAINING half — runtime verified boot (the machine refusing to run an
-# unattested image at load) — is designed, with concrete phases, in
-# docs/BOOT_INTEGRITY.md. It is not yet implemented.
+# The runtime half — verified boot (the machine refusing to run an unverified
+# image at load) — now has a working Ed25519 verify-or-halt mechanism in the
+# kernel (src/kernel/verified_boot.c, CI-gated by the smoke-vboot job). This
+# workflow optionally produces a DETACHED Ed25519 signature over the release
+# manifest so a future first stage (or an out-of-band verifier) can check the
+# shipped image against a trust-anchored public key. See docs/BOOT_INTEGRITY.md.
+#
+# KEY CUSTODY (important): the strict model signs with an OFFLINE key held in a
+# hardware token, never on a CI runner. The signing step below is therefore
+# OPTIONAL and only runs when a maintainer sets the VBOOT_ED25519_PRIVATE_KEY
+# secret; a CI-held key is a lower-assurance convenience channel, not the
+# hardware-rooted anchor. Without the secret the release is still provenance-
+# attested (keyless Sigstore), just without a detached image signature.
 
 on:
   push:
@@ -72,6 +82,28 @@ jobs:
             echo "run:        ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } | tee BUILDINFO.txt
 
+      # OPTIONAL detached Ed25519 signature over the manifest (which binds every
+      # artifact's SHA-256 digest). Runs only when VBOOT_ED25519_PRIVATE_KEY is
+      # configured; the strict model uses an OFFLINE/hardware-token key, so this
+      # CI-side path is a lower-assurance convenience. The signature is verifiable
+      # by the kernel's own Ed25519 verifier (rust/src/ed25519.rs) and by the
+      # published public key. The private key is never written to disk beyond the
+      # ephemeral runner and never committed.
+      - name: Sign the release manifest (optional, Ed25519)
+        if: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY != '' }}
+        env:
+          VBOOT_KEY: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$VBOOT_KEY" > signing_key.pem
+          # Detached raw Ed25519 signature (64 bytes: R||S) over the manifest.
+          openssl pkeyutl -sign -inkey signing_key.pem \
+            -rawin -in SHA256SUMS -out SHA256SUMS.sig
+          # Publish the public half so relying parties can verify the signature.
+          openssl pkey -in signing_key.pem -pubout -out vboot_pubkey.pem
+          rm -f signing_key.pem
+          echo "Signed SHA256SUMS -> SHA256SUMS.sig (verify with vboot_pubkey.pem)"
+
       # Best-effort SBOM (CycloneDX). Pinned + checksum-verified Trivy, matching
       # the CI security job; never blocks the release.
       - name: Generate SBOM (CycloneDX via Trivy)
@@ -98,6 +130,7 @@ jobs:
         run: |
           ASSETS="kernel.elf boot.iso SHA256SUMS BUILDINFO.txt"
           [ -f sbom.cyclonedx.json ] && ASSETS="$ASSETS sbom.cyclonedx.json"
+          [ -f SHA256SUMS.sig ] && ASSETS="$ASSETS SHA256SUMS.sig vboot_pubkey.pem"
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Horus ${GITHUB_REF_NAME}" \
@@ -113,5 +146,7 @@ jobs:
           sha256sum -c SHA256SUMS
           \`\`\`
           \`kernel.elf\` is byte-for-byte reproducible from the tagged source (see docs/BUILDING.md).
-          Runtime verified boot is designed in docs/BOOT_INTEGRITY.md and is not yet enforced." \
+          The kernel's Ed25519 verify-or-halt boot gate is implemented and CI-gated (\`smoke-vboot\`); when a
+          detached \`SHA256SUMS.sig\` + \`vboot_pubkey.pem\` are attached, the manifest is Ed25519-signed.
+          Full image-anchoring (offline key + pre-kmain verify) is scoped in docs/BOOT_INTEGRITY.md." \
             $ASSETS
