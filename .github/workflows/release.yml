@@ -1,0 +1,117 @@
+name: Release
+
+# Cut a signed, provenance-attested release from a version tag (audit finding
+# 3.3 — build provenance / supply-chain half of boot integrity).
+#
+# `actions/attest-build-provenance` generates a SLSA-style build-provenance
+# statement for each artifact, signed KEYLESS via Sigstore using this workflow's
+# short-lived OIDC identity (no long-lived signing key to steal), and records it
+# in the repository's attestation store. The attestation cryptographically binds
+# each artifact's SHA-256 digest to THIS workflow run at THIS commit, so a
+# relying party can confirm a downloaded kernel.elf / boot.iso was built by this
+# repository's CI from the tagged, reviewed source — not substituted, and not
+# built somewhere else. Verify a downloaded artifact with:
+#
+#     gh attestation verify kernel.elf --repo yossicohenmcr-ctrl/Horus
+#
+# Combined with the byte-for-byte reproducible build (the `reproducible` CI job),
+# this closes the "bind running image to reviewed source" gap: anyone can
+# rebuild the identical kernel.elf from the tagged commit AND confirm the
+# published binary carries provenance from this repo's pipeline.
+#
+# The REMAINING half — runtime verified boot (the machine refusing to run an
+# unattested image at load) — is designed, with concrete phases, in
+# docs/BOOT_INTEGRITY.md. It is not yet implemented.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+# Least-privilege default; the release job elevates only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, attest provenance, and publish a signed release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the GitHub Release + upload assets
+      id-token: write       # OIDC identity for keyless Sigstore signing
+      attestations: write   # write the build-provenance attestation
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils make \
+            xorriso grub-pc-bin grub-common mtools
+
+      - name: Add bare-metal Rust target
+        run: rustup target add x86_64-unknown-none
+
+      # Deterministic kernel.elf (clean + build under the pinned SOURCE_DATE_EPOCH),
+      # so the released binary matches what `make reproducible-build` yields for
+      # anyone rebuilding the tagged commit.
+      - name: Reproducible build of kernel.elf
+        run: make reproducible-build
+
+      - name: Build bootable ISO
+        run: make boot.iso
+
+      - name: Compute SHA-256 manifest + build info
+        run: |
+          sha256sum kernel.elf boot.iso | tee SHA256SUMS
+          {
+            echo "repository: ${GITHUB_REPOSITORY}"
+            echo "ref:        ${GITHUB_REF_NAME}"
+            echo "commit:     ${GITHUB_SHA}"
+            echo "run:        ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } | tee BUILDINFO.txt
+
+      # Best-effort SBOM (CycloneDX). Pinned + checksum-verified Trivy, matching
+      # the CI security job; never blocks the release.
+      - name: Generate SBOM (CycloneDX via Trivy)
+        continue-on-error: true
+        run: |
+          TRIVY_VERSION=0.72.0
+          curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -o trivy.tar.gz
+          echo "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea  trivy.tar.gz" | sha256sum --check
+          tar -xzf trivy.tar.gz trivy
+          ./trivy fs --format cyclonedx --output sbom.cyclonedx.json --scanners vuln,secret,misconfig . || true
+
+      # Provenance for the release artifacts (blocking: a release must be attestable).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        with:
+          subject-path: |
+            kernel.elf
+            boot.iso
+            SHA256SUMS
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS="kernel.elf boot.iso SHA256SUMS BUILDINFO.txt"
+          [ -f sbom.cyclonedx.json ] && ASSETS="$ASSETS sbom.cyclonedx.json"
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Horus ${GITHUB_REF_NAME}" \
+            --notes "Signed, provenance-attested build of Horus ${GITHUB_REF_NAME}.
+
+          **Verify provenance** (binds each artifact to this repo's CI at commit \`${GITHUB_SHA}\`):
+          \`\`\`
+          gh attestation verify kernel.elf --repo ${GITHUB_REPOSITORY}
+          gh attestation verify boot.iso   --repo ${GITHUB_REPOSITORY}
+          \`\`\`
+          **Verify integrity** against the manifest:
+          \`\`\`
+          sha256sum -c SHA256SUMS
+          \`\`\`
+          \`kernel.elf\` is byte-for-byte reproducible from the tagged source (see docs/BUILDING.md).
+          Runtime verified boot is designed in docs/BOOT_INTEGRITY.md and is not yet enforced." \
+            $ASSETS
