@@ -34,10 +34,15 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install clippy component
         run: rustup component add clippy
+      # --locked: fail if Cargo.lock is out of date w.r.t. Cargo.toml, so a
+      # dependency added to the manifest but not committed to the lock cannot
+      # slip through by silently rewriting the lock during the build.
       - name: Unit tests (release)
-        run: cargo test --manifest-path rust/Cargo.toml --release
+        run: cargo test --manifest-path rust/Cargo.toml --release --locked
       - name: Clippy — all targets, deny every warning
-        run: cargo clippy --manifest-path rust/Cargo.toml --release --all-targets -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --release --all-targets --locked -- -D warnings
+      - name: Zero-dependency guard (Cargo.lock has no third-party crates)
+        run: tools/check_zero_deps.sh
       - name: Doc-count guard (test/CI-job counts match the docs)
         run: tools/check_doc_counts.sh
 

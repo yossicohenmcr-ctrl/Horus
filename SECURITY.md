@@ -35,6 +35,8 @@ The following are implemented and enforced today:
 
 The security-critical primitives (capabilities, memory refcounting, hashing, RNG, FFI validation) live in safe `no_std` Rust and carry unit tests; the rest of the kernel is C and has **not** undergone systematic fuzzing or third-party review.
 
+The Rust trusted base pulls in **zero third-party crates** — the entire Rust dependency graph is the `horus_shell` crate itself, so there is nothing to trust beyond the pinned compiler. This is enforced in CI: `tools/check_zero_deps.sh` fails the build if `rust/Cargo.lock` ever gains another package, and `cargo`'s `--locked` flag fails if the lock drifts from the manifest.
+
 ---
 
 ## Cryptography & entropy (current implementation)

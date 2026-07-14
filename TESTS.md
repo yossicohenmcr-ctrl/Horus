@@ -89,7 +89,7 @@ help
 
 `.github/workflows/ci.yml` runs **21 jobs**, all hard gates:
 
-1. **rust** — `cargo test --release`, `cargo clippy --all-targets -- -D warnings`, and the `tools/check_doc_counts.sh` doc-count guard
+1. **rust** — `cargo test --release --locked`, `cargo clippy --all-targets --locked -- -D warnings`, the `tools/check_zero_deps.sh` zero-dependency guard (fails if `rust/Cargo.lock` gains any third-party crate), and the `tools/check_doc_counts.sh` doc-count guard
 2. **kernel** — builds `kernel.elf` and a bootable ISO (x86-64) and uploads them as artifacts
 3. **altconfigs** — a build matrix over `DEBUG_SHELL=1` and `MINIMAL_SECURE=1`
 4. **smoke** — `make smoke` (headless boot to the shell/login prompt, no fault)
