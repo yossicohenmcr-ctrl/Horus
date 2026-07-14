@@ -33,6 +33,7 @@ OBJS = src/boot/multiboot.o \
        src/kernel/syscall_fs.o \
        src/kernel/kspawn.o \
        src/kernel/selftest.o \
+       src/kernel/verified_boot.o \
        src/kernel/syscall_ipc.o \
        src/kernel/ramfs.o \
        src/kernel/storage.o \
@@ -188,6 +189,20 @@ ifeq ($(NOTIFY_SELFTEST),1)
 CFLAGS  += -DNOTIFY_SELFTEST
 ASFLAGS += -DNOTIFY_SELFTEST
 NOTIFY_SELFTEST_DEP = userspace/notifytest.bin
+endif
+
+# VBOOT_SELFTEST=1 exercises the Ed25519 verified-boot gate (verified_boot.c):
+# at boot the kernel verifies a signed manifest against an embedded public key
+# and halts if it fails. Proves the enforce-or-halt runtime boot-integrity
+# mechanism (audit 3.3). VBOOT_TAMPER=1 corrupts the payload so the reject path
+# (verification fails -> boot halts) is exercised too. Gated off the ship kernel.
+VBOOT_SELFTEST ?= 0
+ifeq ($(VBOOT_SELFTEST),1)
+CFLAGS  += -DVBOOT_SELFTEST
+VBOOT_TAMPER ?= 0
+ifeq ($(VBOOT_TAMPER),1)
+CFLAGS  += -DVBOOT_TAMPER
+endif
 endif
 
 # PROC_SELFTEST=1 embeds the proctest driver and, at boot, drives SYS_EXIT +
@@ -656,6 +671,28 @@ smoke-notify:
 	@$(MAKE) --no-print-directory boot.iso
 	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 REQUIRE_MARKER='NOTIFY_SELFTEST: PASS' \
 		FAIL_MARKER='NOTIFY_SELFTEST: FAIL' tools/smoke_test.sh boot.iso
+
+# Ed25519 verified-boot gate (audit 3.3, runtime half). Two headless boots:
+#  (1) ACCEPT: a valid signature over the signed manifest authorizes the boot.
+#  (2) REJECT: a tampered manifest fails verification and the kernel halts.
+# Both assert their marker on serial; the from-scratch Ed25519 verifier is
+# additionally validated against RFC 8032 + an OpenSSL signature in `cargo test`.
+.PHONY: smoke-vboot
+smoke-vboot:
+	@echo "== verified-boot ACCEPT: valid manifest signature -> boot authorized =="
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory VBOOT_SELFTEST=1
+	@$(MAKE) --no-print-directory boot.iso
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
+		REQUIRE_MARKER='VBOOT_SELFTEST: PASS manifest signature verified' \
+		FAIL_MARKER='VBOOT_SELFTEST: FAIL' tools/smoke_test.sh boot.iso
+	@echo "== verified-boot REJECT: tampered manifest -> halt =="
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory VBOOT_SELFTEST=1 VBOOT_TAMPER=1
+	@$(MAKE) --no-print-directory boot.iso
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
+		REQUIRE_MARKER='VBOOT_SELFTEST: PASS tampered manifest rejected' \
+		FAIL_MARKER='VBOOT_SELFTEST: FAIL' tools/smoke_test.sh boot.iso
 
 # Scripted integration session: build the shipped kernel and drive the *real*
 # ring-3 shell over serial (login, identity, and a capability-gated admin op

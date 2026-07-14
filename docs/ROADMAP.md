@@ -51,13 +51,14 @@ five runtime self-tests in CI. Already in place:
 - **Userspace runtime** — a demand-paged heap via `sbrk`/`brk`, a userspace
   `malloc`, and a newlib libc port over a per-process POSIX fd layer
   (`make smoke-newlib`).
-- **CI** — 21 gated jobs: `rust` (`cargo test` + `clippy -D warnings`),
+- **CI** — 22 gated jobs: `rust` (`cargo test` + `clippy -D warnings`),
   `kernel` (build + ISO), `altconfigs` (DEBUG_SHELL/MINIMAL_SECURE matrix), the
   headless QEMU boot `smoke`, thirteen runtime self-tests (`smoke-elf`,
   `smoke-preempt`, `smoke-signal`, `smoke-proc`, `smoke-notify`, `smoke-smp`,
   `smoke-fs`, `smoke-fs-perms`, `smoke-fs-conc`, `smoke-fs-persist`,
   `smoke-fs-wal`, `smoke-fs-large`, `smoke-newlib`), the scripted
-  `smoke-session` integration test, a `reproducible` build check, a
+  `smoke-session` integration test, the `smoke-vboot` Ed25519 verified-boot gate,
+  a `reproducible` build check, a
   `security` SAST/SBOM scan, and a `tla` TLA+ model-checking job (TLC verifies
   the capability-algebra, paging-isolation, and two-CPU seqlock invariants). The whole filesystem suite (persistence,
   permissions, concurrency, journal crash-recovery, large files), the newlib
