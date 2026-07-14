@@ -165,7 +165,14 @@ int cap_install_from_root(int pid, uint32_t slot, uint32_t root_slot, uint32_t o
  * cspace and may reach root_cnode; this mirrors caller_has_authority()'s
  * no-ambient-authority guard for the mutating ops.
  */
-struct capability *cap_lookup(uint32_t slot, uint32_t required_rights) {
+/*
+ * cap_lookup_locked: resolve a slot assuming the caller holds cap_lock (or runs
+ * single-threaded at boot). This is the original cap_lookup body; the seqlock
+ * retry lives in the public cap_lookup wrapper below. In-lock callers must use
+ * THIS one — the retry wrapper would spin forever on the odd seq their own
+ * cap_lock section has set (spin_lock is not recursive).
+ */
+struct capability *cap_lookup_locked(uint32_t slot, uint32_t required_rights) {
     if (slot >= CNODE_SIZE) return NULL;
 
     int cur = get_current_task();
@@ -190,8 +197,40 @@ struct capability *cap_lookup(uint32_t slot, uint32_t required_rights) {
     return p;
 }
 
+/*
+ * cap_lookup: lock-free capability resolution for callers that do NOT hold
+ * cap_lock (the syscall dispatcher gate, cap_revalidate, and the various
+ * handler-level lookups). It is a seqlock reader over cap_seq (audit 3.1): it
+ * takes a snapshot only when no cap_lock section is mid-flight (seq even) and no
+ * write intervened across its field reads (seq unchanged), so a concurrent
+ * capability mutation on another CPU can never make it observe a torn cap (e.g.
+ * new rights with an old serial) or a half-nulled slot. The returned pointer's
+ * later USE across a yield/block is a separate TOCTOU, still closed by
+ * cap_snapshot/cap_revalidate and by the kill/grant/signal cap_lock brackets.
+ *
+ * cap_lookup_locked reads only capability fields (never dereferences an object
+ * id) and the running task's own cspace pointer is stable while it runs on this
+ * CPU, so an inconsistent read is at worst a discarded value, never a fault.
+ * On the single-core kernel the loop always succeeds on the first pass.
+ */
+struct capability *cap_lookup(uint32_t slot, uint32_t required_rights) {
+    for (;;) {
+        uint32_t s1 = __atomic_load_n(&cap_seq, __ATOMIC_SEQ_CST);
+        if (s1 & 1u) {                     /* a cap_lock section is active */
+            __asm__ volatile ("pause" ::: "memory");
+            continue;
+        }
+        struct capability *p = cap_lookup_locked(slot, required_rights);
+        uint32_t s2 = __atomic_load_n(&cap_seq, __ATOMIC_SEQ_CST);
+        if (s1 == s2) return p;            /* stable snapshot: no write intervened */
+        __asm__ volatile ("pause" ::: "memory");
+    }
+}
+
 void kassert_cap(struct capability *c){if(!c){for(;;){}}}
-struct capability *kcap_lookup(uint32_t slot,uint32_t r){struct capability *c=cap_lookup(slot,r);kassert_cap(c);return c;}
+/* kcap_lookup is called only by cap_mint/cap_transfer, which hold cap_lock, so
+ * it must use the non-retrying variant. */
+struct capability *kcap_lookup(uint32_t slot,uint32_t r){struct capability *c=cap_lookup_locked(slot,r);kassert_cap(c);return c;}
 
 /*
  * Capability snapshot + revalidation (defense-in-depth against lookup/use

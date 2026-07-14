@@ -765,14 +765,49 @@ void scheduler_lock_release(void) { spin_unlock(&scheduler_lock); }
 
 static volatile int irq_lock_depth = 0;
 
+/*
+ * Capability seqlock counter (audit finding 3.1: lockless `cap_lookup` vs. a
+ * concurrent capability mutation on another CPU).
+ *
+ * EVERY capability mutation already runs under `cap_lock` (cap_mint/transfer/
+ * revoke, the system-wide revoke sweep, cap_install_from_root, the spawn/sudo
+ * cspace endowments, SYS_CAP_GRANT). To let the read side — `cap_lookup`, which
+ * is DELIBERATELY lock-free so the kill/grant/signal paths can nest it inside a
+ * `cap_lock` critical section without a non-recursive self-deadlock — observe a
+ * torn-free snapshot, we make holding `cap_lock` bump this counter: odd while a
+ * `cap_lock` section is in flight, even when the cap state is stable. Tying the
+ * bump to the lock itself (rather than to each mutator) means no present or
+ * FUTURE writer can forget it, provided it obeys the existing "mutate caps only
+ * under cap_lock" invariant.
+ *
+ * `cap_lookup` reads this before and after its field reads and retries on an
+ * odd/changed value (a standard seqlock reader). On the single-core default no
+ * cap write ever runs concurrently with a lock-free reader (writes hold cap_lock
+ * with interrupts masked, and no ISR mutates caps), so the counter stays even
+ * and the reader never retries; the machinery only does work under SMP.
+ */
+uint32_t cap_seq = 0;
+
 void spin_lock(spinlock_t *lock) {
     __asm__ volatile ("cli" ::: "memory");
     irq_lock_depth++;
     while (__sync_lock_test_and_set(&lock->locked, 1)) {
         while (lock->locked) { __asm__ volatile ("pause" ::: "memory"); }
     }
+    /* Enter a cap_lock critical section: seq -> odd, ordered after the acquire
+     * so a lock-free reader either sees odd (and retries) or has already taken a
+     * stable snapshot before this write began. */
+    if (lock == &cap_lock) {
+        __atomic_fetch_add(&cap_seq, 1, __ATOMIC_SEQ_CST);
+    }
 }
 void spin_unlock(spinlock_t *lock) {
+    /* Leave a cap_lock critical section: seq -> even, ordered before the release
+     * so all cspace writes in the section are visible to a reader that then
+     * observes the even count. */
+    if (lock == &cap_lock) {
+        __atomic_fetch_add(&cap_seq, 1, __ATOMIC_SEQ_CST);
+    }
     __sync_lock_release(&lock->locked);
 
     if (irq_lock_depth > 0 && --irq_lock_depth == 0) {
