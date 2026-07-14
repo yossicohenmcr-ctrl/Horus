@@ -110,9 +110,10 @@ void h_connect_fs_server(struct regs *r) {
     dest->type   = CAP_ENDPOINT;
     dest->rights = rights & (CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT);
     dest->object = fs_server_listen_ep_idx;
-    dest->badge  = 0xF51A0000U;
+    dest->badge  = 0xF51A0000U;   /* semantic FS-endpoint marker (not a lineage link) */
     dest->serial = serial;
     dest->generation = 0;
+    dest->parent = 0;             /* primordial for the client: no derivation parent */
     r->eax = 0;
 }
 

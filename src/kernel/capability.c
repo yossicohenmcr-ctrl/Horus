@@ -13,6 +13,7 @@ _Static_assert(__builtin_offsetof(capability_t, object)     == 8,  "cap.object o
 _Static_assert(__builtin_offsetof(capability_t, badge)      == 16, "cap.badge offset");
 _Static_assert(__builtin_offsetof(capability_t, serial)     == 20, "cap.serial offset");
 _Static_assert(__builtin_offsetof(capability_t, generation) == 24, "cap.generation offset");
+_Static_assert(__builtin_offsetof(capability_t, parent)     == 28, "cap.parent offset");
 _Static_assert(CAP_NULL == 0, "CAP_NULL must be 0 (matches Rust)");
 
 extern tcb_t tasks[MAX_TASKS];
@@ -63,6 +64,8 @@ void cap_init(void) {
         root_cnode[i].object = 0;
         root_cnode[i].badge = 0;
         root_cnode[i].serial = 0;
+        root_cnode[i].generation = 0;
+        root_cnode[i].parent = 0;
     }
     root_cnode[0].type = CAP_TCB;
     root_cnode[0].rights = CAP_RIGHT_ALL;
@@ -369,10 +372,11 @@ bool cap_revoke(uint32_t slot) {
         }
     }
 
-    /* Snapshot serial/badge for the rev_sets cleanup below, before the slot is
-     * nulled by the revocation. */
+    /* Snapshot serial / lineage parent for the rev_sets cleanup below, before the
+     * slot is nulled. Lineage identity is (serial, parent) — never the semantic
+     * badge (I2). */
     uint32_t target_serial = cspace[slot].serial;
-    uint32_t target_badge = cspace[slot].badge;
+    uint32_t target_parent = cspace[slot].parent;
 
     /*
      * INVARIANT (ARCHITECTURE.md): revocation is system-wide. We hand the Rust
@@ -408,7 +412,7 @@ bool cap_revoke(uint32_t slot) {
 
     for (int r = 0; r < MAX_REV_SETS; r++) {
         if (rev_sets[r].valid &&
-            (rev_sets[r].badge == target_badge || rev_sets[r].badge == slot ||
+            (rev_sets[r].badge == target_parent || rev_sets[r].badge == slot ||
              (target_serial != 0 && rev_sets[r].badge == target_serial))) {
             rev_sets[r].valid = 0;
         }
@@ -448,9 +452,10 @@ bool cap_create_revocation_set(uint32_t target_slot, uint32_t rev_slot) {
     cspace[rev_slot].type   = CAP_REVOCATION;
     cspace[rev_slot].rights = CAP_RIGHT_REVOKE;
     cspace[rev_slot].object = target_slot;
-    cspace[rev_slot].badge  = 0xDEAD0000U;
+    cspace[rev_slot].badge  = 0xDEAD0000U;   /* semantic marker, not a lineage link */
     cspace[rev_slot].serial = fresh_serial;
     cspace[rev_slot].generation = 0;
+    cspace[rev_slot].parent = 0;
 
     spin_unlock(&cap_lock);
     return true;

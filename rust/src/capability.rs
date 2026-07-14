@@ -7,9 +7,18 @@ pub struct Capability {
     pub typ: u32,
     pub rights: u32,
     pub object: u64,
+    /// Application-level semantic tag. NEVER used for revocation matching — see
+    /// `parent` for the lineage link. Kept purely so a badge carried by a cap
+    /// (e.g. a type marker set by the C kernel) cannot collaterally match a
+    /// serial during a revocation sweep (audit finding I2).
     pub badge: u32,
     pub serial: u32,
     pub generation: u32,
+    /// Lineage link: the serial of this capability's immediate parent in the
+    /// derivation tree (0 for a primordial/root cap with no parent). This is the
+    /// ONLY field revocation walks. Occupies what used to be trailing padding, so
+    /// the struct size is unchanged (still 32 bytes).
+    pub parent: u32,
 }
 
 pub const CAP_NULL: u32 = 0;
@@ -33,6 +42,7 @@ const _: () = {
     assert!(core::mem::offset_of!(Capability, badge) == 16);
     assert!(core::mem::offset_of!(Capability, serial) == 20);
     assert!(core::mem::offset_of!(Capability, generation) == 24);
+    assert!(core::mem::offset_of!(Capability, parent) == 28);
     assert!(CAP_NULL == 0);
 };
 
@@ -291,9 +301,13 @@ pub unsafe extern "C" fn rust_cap_mint(
         typ: src.typ,
         rights: effective_rights,
         object: src.object,
-        badge: parent_serial,
+        // The derivation link lives in `parent`; the semantic badge simply
+        // travels with the capability (inherited from the source, like a
+        // whole-struct grant copy). Revocation walks `parent`, never `badge`.
+        badge: src.badge,
         serial: fresh,
         generation: src.generation,
+        parent: parent_serial,
     };
     if src.object != 0 {
         // Adopt the parent's generation as the floor for this lineage so the
@@ -327,25 +341,24 @@ unsafe fn nullify(c: &mut Capability) {
     c.badge = 0;
     c.serial = 0;
     c.generation = 0;
+    c.parent = 0;
 }
 
 // ---------------------------------------------------------------------------
 // Transitive (precise) revocation.
 //
-// A derived capability records its *immediate* parent's serial in its `badge`
-// (see `rust_cap_mint`: `badge: parent_serial`). The derivation relation is
-// therefore a forest of parent-serial links, and revoking a capability means
-// nulling exactly the subtree rooted at it — its children, grandchildren, and
-// deeper — and nothing else.
+// A derived capability records its *immediate* parent's serial in its dedicated
+// `parent` field (see `rust_cap_mint`: `parent: parent_serial`). The derivation
+// relation is therefore a forest of parent-serial links, and revoking a
+// capability means nulling exactly the subtree rooted at it — its children,
+// grandchildren, and deeper — and nothing else.
 //
-// The old sweep matched by (serial | badge | object): matching `object` also
-// caught unrelated capabilities that merely shared the same kernel object, and
-// matching the target's own `badge` also caught its parent (an ancestor) and
-// its siblings. That was both over-broad (K1) and the only thing that reached
-// grandchildren (whose badge is the *child's* serial, not the target's). The
-// walk below is precise AND transitive: it follows the real parent-serial links
-// to a fixpoint, so ancestors, siblings, and independent same-object caps are
-// left intact while every genuine descendant is revoked.
+// The lineage link is a field OF ITS OWN, distinct from the application-level
+// `badge` (audit finding I2): a semantic badge value (e.g. a type marker the C
+// kernel writes) can never be mistaken for a parent serial during the sweep, so
+// it can never trigger a collateral revocation. The walk follows the `parent`
+// links to a fixpoint, so ancestors, siblings, and independent same-object caps
+// are left intact while every genuine descendant is revoked.
 // ---------------------------------------------------------------------------
 
 /// Scratch worklist for the transitive revocation walk, holding the serials of
@@ -360,7 +373,7 @@ static mut REVOKE_WORKLIST: [u32; REVOKE_SCRATCH_CAP] = [0; REVOKE_SCRATCH_CAP];
 
 /// Transitively revoke the derivation subtree rooted at `seed_serial`, sweeping
 /// every cspace in `spaces`. The seed capability itself must already be nulled
-/// by the caller; this walks the `badge == parent.serial` links to null every
+/// by the caller; this walks the `parent == parent.serial` links to null every
 /// descendant while leaving ancestors, siblings, and independent capabilities
 /// that merely share the same object untouched. Decrements each space's
 /// `caps_in_use` once per nulled cap when that pointer is non-null.
@@ -373,7 +386,7 @@ unsafe fn revoke_subtree(spaces: *const CSpaceDesc, space_count: u32, seed_seria
         return;
     }
     // A serial of 0 means "no parent" (a primordial/root cap), so a stored 0 in
-    // a badge never links to anything and is skipped below.
+    // a `parent` field never links to anything and is skipped below.
     let worklist = &mut *ptr::addr_of_mut!(REVOKE_WORKLIST);
     let mut head = 0usize;
     let mut tail = 0usize;
@@ -397,7 +410,7 @@ unsafe fn revoke_subtree(spaces: *const CSpaceDesc, space_count: u32, seed_seria
                 // Match only the direct parent-serial link. Serials are unique,
                 // so this identifies children of `parent_serial` and nothing
                 // else — no ancestor, sibling, or same-object false positives.
-                if c.badge != 0 && c.badge == parent_serial {
+                if c.parent != 0 && c.parent == parent_serial {
                     let child_serial = c.serial;
                     nullify(c);
                     if !d.caps_in_use.is_null() && *d.caps_in_use > 0 {
@@ -597,7 +610,15 @@ mod tests {
     use core::ptr::addr_of_mut;
 
     fn cap(typ: u32, rights: u32, object: u64, badge: u32, serial: u32, generation: u32) -> Capability {
-        Capability { typ, rights, object, badge, serial, generation }
+        Capability { typ, rights, object, badge, serial, generation, parent: 0 }
+    }
+
+    /// Like `cap` but with an explicit lineage `parent` — for constructing a
+    /// derived capability by hand (mirrors what `rust_cap_mint` produces).
+    fn cap_child(
+        typ: u32, rights: u32, object: u64, badge: u32, serial: u32, generation: u32, parent: u32,
+    ) -> Capability {
+        Capability { typ, rights, object, badge, serial, generation, parent }
     }
 
     /// Regression: a derived capability minted into a *second* task's cspace
@@ -610,9 +631,9 @@ mod tests {
 
         // Task A holds the parent CAP_FRAME (object 0x5000, serial 0x4000, gen 1).
         a[4] = cap(1, 0x3f, 0x5000, 0, 0x4000, 1);
-        // Task B holds a derived copy: badge == parent serial, same object,
+        // Task B holds a derived copy: parent == A's serial, same object,
         // reduced rights, its own fresh serial — exactly what cap_mint produces.
-        b[7] = cap(1, 0x03, 0x5000, 0x4000, 0x9001, 1);
+        b[7] = cap_child(1, 0x03, 0x5000, 0, 0x9001, 1, 0x4000);
 
         let mut ciu_a = 1u32;
         let mut ciu_b = 1u32;
@@ -703,8 +724,8 @@ mod tests {
             assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 5, 4, 0x3f, &mut next, 0)); // child
             assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 6, 5, 0x3f, &mut next, 0)); // grandchild
             // The grandchild links to its immediate parent (child), not the root.
-            assert_eq!(cs[6].badge, cs[5].serial);
-            assert_ne!(cs[6].badge, cs[4].serial);
+            assert_eq!(cs[6].parent, cs[5].serial);
+            assert_ne!(cs[6].parent, cs[4].serial);
 
             assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 4, core::ptr::null_mut()));
             assert_eq!(cs[4].typ, CAP_NULL, "root revoked");
@@ -759,9 +780,9 @@ mod tests {
         unsafe {
             assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 5, 4, 0x3f, &mut next, 0)); // child 1
             assert!(rust_cap_mint(cs.as_mut_ptr(), 16, 6, 4, 0x3f, &mut next, 0)); // child 2 (sibling)
-            // Siblings share the parent's serial as their badge.
-            assert_eq!(cs[5].badge, cs[4].serial);
-            assert_eq!(cs[6].badge, cs[4].serial);
+            // Siblings share the parent's serial as their lineage `parent`.
+            assert_eq!(cs[5].parent, cs[4].serial);
+            assert_eq!(cs[6].parent, cs[4].serial);
 
             // Revoke only child 1.
             assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 5, core::ptr::null_mut()));
@@ -775,10 +796,37 @@ mod tests {
         }
     }
 
+    /// I2 regression: a capability whose *semantic* `badge` happens to equal a
+    /// serial being revoked must NOT be collaterally revoked. Revocation walks
+    /// the dedicated `parent` link only, so a badge/serial coincidence is inert.
+    /// Under the old design (badge doubled as the lineage link) B would be nulled.
+    #[test]
+    fn test_semantic_badge_collision_no_collateral_revoke() {
+        let mut cs = [cap(0, 0, 0, 0, 0, 0); 16];
+        // A: an ordinary capability with serial 0x5000.
+        cs[4] = cap(1, 0x3f, 0x9100, 0, 0x5000, 0);
+        // B: an UNRELATED capability that merely carries badge == A's serial as a
+        // semantic marker, with no lineage parent and a different object.
+        cs[7] = cap_child(1, 0x3f, 0x9200, 0x5000 /* badge collides with A.serial */, 0x6000, 0, 0);
+        unsafe {
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 7, 0x1).is_null());
+
+            assert!(rust_cap_revoke(cs.as_mut_ptr(), 16, 4, core::ptr::null_mut()));
+            assert_eq!(cs[4].typ, CAP_NULL, "A revoked");
+
+            // B survives — its badge coinciding with A's serial is irrelevant.
+            assert_ne!(
+                cs[7].typ, CAP_NULL,
+                "a semantic badge equal to a revoked serial must not cause collateral revocation"
+            );
+            assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 7, 0x1).is_null());
+        }
+    }
+
     #[test]
     fn test_lookup_and_mint_basic() {
-        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0 }; 16];
-        cspace[0] = Capability { typ: 1, rights: 0x3f, object: 42, badge: 0, serial: 0x1000, generation: 0 };
+        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0, parent: 0 }; 16];
+        cspace[0] = Capability { typ: 1, rights: 0x3f, object: 42, badge: 0, serial: 0x1000, generation: 0, parent: 0 };
 
         let mut next = 0x1001u32;
 
@@ -799,7 +847,8 @@ mod tests {
             let c5 = &*looked;
             assert_eq!(c5.typ, 1);
             assert_eq!(c5.rights, 0x3);
-            assert_eq!(c5.badge, 0x1000);
+            assert_eq!(c5.parent, 0x1000, "the minted cap links to the source serial");
+            assert_eq!(c5.badge, 0, "badge is inherited from the source (0 here), not the lineage link");
             assert!(c5.serial > 0x1000);
             assert_eq!(c5.generation, 0);
         }
@@ -807,15 +856,15 @@ mod tests {
 
     #[test]
     fn test_revoke_clears_and_serial_is_fresh() {
-        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0 }; 16];
-        cspace[0] = Capability { typ: 1, rights: 0x3f, object: 99, badge: 0, serial: 0x2000, generation: 1 };
+        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0, parent: 0 }; 16];
+        cspace[0] = Capability { typ: 1, rights: 0x3f, object: 99, badge: 0, serial: 0x2000, generation: 1, parent: 0 };
 
         let mut next = 0x2001u32;
         unsafe {
             let mint_ok = rust_cap_mint(cspace.as_mut_ptr(), 16, 6, 0, 0x7, &mut next, 0);
             assert!(mint_ok);
             let child_before = *cspace.as_ptr().add(6);
-            assert_eq!(child_before.badge, 0x2000);
+            assert_eq!(child_before.parent, 0x2000);
             assert_eq!(child_before.generation, 1);
 
             
@@ -834,12 +883,12 @@ mod tests {
         
         
         
-        let mut cs = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0 }; 16];
+        let mut cs = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0, parent: 0 }; 16];
         unsafe {
             let ga = bump_lineage(0x1001);
             let gb = bump_lineage(0x1101);
-            cs[4] = Capability { typ: 1, rights: 0x3f, object: 0x1001, badge: 0, serial: 0x100, generation: ga };
-            cs[5] = Capability { typ: 1, rights: 0x3f, object: 0x1101, badge: 0, serial: 0x200, generation: gb };
+            cs[4] = Capability { typ: 1, rights: 0x3f, object: 0x1001, badge: 0, serial: 0x100, generation: ga, parent: 0 };
+            cs[5] = Capability { typ: 1, rights: 0x3f, object: 0x1101, badge: 0, serial: 0x200, generation: gb, parent: 0 };
 
             
             let _ = bump_lineage(0x1001);
@@ -854,8 +903,8 @@ mod tests {
 
     #[test]
     fn test_strict_rights_and_no_escalation() {
-        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0 }; 16];
-        cspace[0] = Capability { typ: 5, rights: 0b0011, object: 7, badge: 0, serial: 0x3000, generation: 0 };
+        let mut cspace = [Capability { typ: 0, rights: 0, object: 0, badge: 0, serial: 0, generation: 0, parent: 0 }; 16];
+        cspace[0] = Capability { typ: 5, rights: 0b0011, object: 7, badge: 0, serial: 0x3000, generation: 0, parent: 0 };
 
         let mut next = 0x3001u32;
         unsafe {
@@ -940,7 +989,7 @@ mod tests {
             assert_eq!(d.typ, 4);
             assert_eq!(d.rights, 0x3f, "transfer preserves the source's full rights");
             assert_eq!(d.object, 0xA200);
-            assert_eq!(d.badge, 0xA201, "the copy records the source serial as its badge");
+            assert_eq!(d.parent, 0xA201, "the copy records the source serial as its lineage parent");
             assert!(d.serial >= MIN_DERIVED_SERIAL && d.serial != 0xA201,
                 "the copy gets a fresh serial, distinct from the source");
             assert!(!rust_cap_lookup(cs.as_mut_ptr(), 16, 8, 0x3f).is_null());

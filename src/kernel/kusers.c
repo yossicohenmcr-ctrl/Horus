@@ -574,6 +574,7 @@ void h_sudo(struct regs *r) {
         tasks[pid].cspace[3].badge  = 0;
         tasks[pid].cspace[3].serial = s3;
         tasks[pid].cspace[3].generation = 0;
+        tasks[pid].cspace[3].parent = 0;   /* primordial re-provision: clear any stale lineage link (I2) */
 
         tasks[pid].cspace[6].type   = CAP_USER;
         tasks[pid].cspace[6].rights = CAP_RIGHT_ALL;
@@ -581,6 +582,7 @@ void h_sudo(struct regs *r) {
         tasks[pid].cspace[6].badge  = 0xC0DE0006U;
         tasks[pid].cspace[6].serial = s6;
         tasks[pid].cspace[6].generation = 0;
+        tasks[pid].cspace[6].parent = 0;
 
         tasks[pid].cspace[7].type   = CAP_TCB;
         tasks[pid].cspace[7].rights = CAP_RIGHT_ALL;
@@ -588,6 +590,7 @@ void h_sudo(struct regs *r) {
         tasks[pid].cspace[7].badge  = 0;
         tasks[pid].cspace[7].serial = s7;
         tasks[pid].cspace[7].generation = 0;
+        tasks[pid].cspace[7].parent = 0;
         spin_unlock(&cap_lock);
     }
     r->eax = pid;

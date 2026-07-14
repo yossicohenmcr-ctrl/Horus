@@ -341,9 +341,12 @@ typedef struct capability {
     uint32_t type;
     uint32_t rights;
     uint64_t object;
-    uint32_t badge;
+    uint32_t badge;       /* application-level semantic tag; NEVER matched by revocation */
     uint32_t serial;
     uint32_t generation;
+    uint32_t parent;      /* lineage link: immediate parent's serial (0 = primordial).
+                           * The ONLY field revocation walks. Fills former padding,
+                           * so sizeof(capability_t) is unchanged. See I2 in the audit. */
 } capability_t;
 
 /* Immutable identity snapshot of a capability, taken at lookup time and

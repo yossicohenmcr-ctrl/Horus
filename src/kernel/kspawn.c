@@ -111,7 +111,11 @@ static int do_spawn_inner(void) {
         tasks[new_id].cspace[6].type   = CAP_USER;
         tasks[new_id].cspace[6].rights = CAP_RIGHT_ALL;
         tasks[new_id].cspace[6].object = 0;
-        tasks[new_id].cspace[6].badge  = creator_admin->serial ? creator_admin->serial : 0xC0DE0006U;
+        /* Lineage link, so revoking the creator's admin cap revokes this one too.
+         * The semantic admin marker now lives in `badge`, separate from the link,
+         * so it can never be mistaken for a serial during a revocation sweep (I2). */
+        tasks[new_id].cspace[6].badge  = 0xC0DE0006U;
+        tasks[new_id].cspace[6].parent = creator_admin->serial;  /* 0 if the creator has none */
         tasks[new_id].cspace[6].serial = cap6_serial;
         tasks[new_id].cspace[6].generation = creator_admin->generation;
     }
@@ -141,6 +145,7 @@ static void grant_child_tcb_cap(int spawner, int pid) {
             cs[s].badge      = 0;
             cs[s].serial     = cap_alloc_fresh_serial();
             cs[s].generation = 0;
+            cs[s].parent     = 0;   /* kernel-granted TCB cap: no derivation parent */
             break;
         }
     }

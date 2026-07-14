@@ -133,6 +133,9 @@ create_user_pagedir(id);
         tasks[id].cspace[s].badge      = 0;
         tasks[id].cspace[s].serial     = 0;
         tasks[id].cspace[s].generation = 0;
+        tasks[id].cspace[s].parent     = 0;   /* clear the lineage link too, or a
+                                               * reused slot inherits a dead task's
+                                               * derivation parent (I2). */
     }
 
     tasks[id].cspace[0].type   = CAP_TCB;
