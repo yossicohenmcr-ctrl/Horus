@@ -60,6 +60,8 @@ The `PAGE_COW` flag and refcount infrastructure are in place, and the page-fault
 
 Multi-core works behind `SMP=1`, but the shipped kernel is single-core. The multi-core scheduler shares one runnable pool with a per-CPU pull; there are no per-CPU run queues, no priorities or fairness, and no flush-on-switch. Retiring the gate and hardening the scheduler is Phase 3.
 
+Capability resolution is now SMP-safe on the read side: `cap_lookup` is a seqlock reader over `cap_seq` (bumped odd/even by every `cap_lock` acquire/release), so a lock-free lookup on one CPU can no longer observe a torn capability or a half-nulled slot while a capability mutation (mint/transfer/revoke sweep/grant) runs under `cap_lock` on another CPU — it retries until it has a stable snapshot. This closes the lockless-`cap_lookup` data race. The separate lookup→use TOCTOU on the *returned* pointer remains closed as before (snapshot/revalidate on the IPC paths; the `SYS_KILL`/`SYS_SIGNAL`/`SYS_CAP_GRANT` `cap_lock` brackets). What is still outstanding for SMP is scheduler maturity (per-CPU queues, priorities) and microarchitectural flush-on-switch, not capability integrity.
+
 ### ASLR entropy ceiling (32-bit userspace window)
 
 Per-spawn stack top, heap gap, and image load base are all randomised from the CSPRNG (userspace is static-PIE and relocated at load). The remaining limitation is *entropy*, not mechanism — userspace runs in 32-bit compatibility mode confined to the low ~8 MiB window, so the image base has ~9 bits of entropy rather than the tens of bits a 64-bit userspace ABI would allow.

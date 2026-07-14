@@ -317,7 +317,10 @@ static int task_kill_authorized(int target) {
     int cur = get_current_task();
     if (cur <= 0 || cur >= MAX_TASKS) return 0;
 
-    struct capability *admin = cap_lookup(6, CAP_RIGHT_ALL);
+    /* Called only from inside a cap_lock critical section (h_kill / h_signal),
+     * so use the non-retrying lookup — the seqlock reader would spin on the odd
+     * seq our own cap_lock section set. */
+    struct capability *admin = cap_lookup_locked(6, CAP_RIGHT_ALL);
     if (admin && admin->type == CAP_USER) return 1;
 
     capability_t *cs = tasks[cur].cspace;
@@ -346,8 +349,9 @@ static void h_kill(struct regs *r) {
      * holding it here means a concurrent revoke on another CPU cannot land
      * between the authority check and the teardown and strip the CAP_TCB/admin
      * cap we just validated (the SMP TOCTOU on raw cap pointers). task_teardown
-     * takes no locks, so bracketing it with cap_lock cannot deadlock; cap_lookup
-     * (via task_kill_authorized) does not take cap_lock either, so no recursion. */
+     * takes no locks, so bracketing it with cap_lock cannot deadlock; the lookup
+     * (via task_kill_authorized) uses cap_lookup_locked, the non-retrying variant,
+     * so it neither recurses on cap_lock nor spins on the seq this section set. */
     spin_lock(&cap_lock);
     if (!task_kill_authorized(target)) {
         spin_unlock(&cap_lock);
@@ -599,9 +603,10 @@ static void h_cap_grant(struct regs *r) {
      * critical section. Revocation always runs under cap_lock, so a concurrent
      * revoke on another CPU cannot (a) strip the CAP_TCB/admin authority between
      * the check and the install, nor (b) invalidate `src` between the lookup and
-     * the copy (the SMP TOCTOU on raw cap pointers). cap_lookup does not take
-     * cap_lock, so calling it here does not recurse; audit_log runs after the
-     * unlock so no audit-subsystem lock nests under cap_lock. */
+     * the copy (the SMP TOCTOU on raw cap pointers). We call the non-retrying
+     * cap_lookup_locked below (the public seqlock reader would spin on the odd
+     * seq this cap_lock section set); audit_log runs after the unlock so no
+     * audit-subsystem lock nests under cap_lock. */
     spin_lock(&cap_lock);
     /* Same authority as SYS_KILL: a CAP_TCB to the target, or admin. */
     if (!task_kill_authorized(target)) {
@@ -610,7 +615,7 @@ static void h_cap_grant(struct regs *r) {
         r->eax = (uint32_t)SYS_ERR_PERM; return;
     }
     /* The source must be a live capability the caller actually holds. */
-    struct capability *src = cap_lookup(src_slot, 0);
+    struct capability *src = cap_lookup_locked(src_slot, 0);
     if (!src || src->type == CAP_NULL) {
         spin_unlock(&cap_lock);
         r->eax = (uint32_t)SYS_ERR_NOENT; return;

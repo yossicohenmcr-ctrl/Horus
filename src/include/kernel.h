@@ -595,6 +595,11 @@ typedef struct spinlock {
 extern spinlock_t storage_lock;
 extern spinlock_t cap_lock;
 extern spinlock_t page_lock;
+/* Capability seqlock version (audit 3.1). Bumped to odd on cap_lock acquire and
+ * to even on release (see spin_lock/spin_unlock in scheduler.c); the lock-free
+ * cap_lookup reads it around its field reads to obtain a torn-free snapshot
+ * against a concurrent cap mutation on another CPU. */
+extern uint32_t cap_seq;
 
 
 
@@ -726,6 +731,12 @@ void paging_init(void);
 
 void cap_init(void);
 capability_t *cap_lookup(uint32_t slot, uint32_t required_rights);
+/* Non-retrying variant of cap_lookup for callers that ALREADY hold cap_lock
+ * (kcap_lookup via cap_mint/cap_transfer, task_kill_authorized via
+ * SYS_KILL/SYS_SIGNAL, and SYS_CAP_GRANT). Using the public cap_lookup there
+ * would spin forever on the odd seq the caller's own cap_lock section set.
+ * Callers must hold cap_lock (or run single-threaded at boot). */
+capability_t *cap_lookup_locked(uint32_t slot, uint32_t required_rights);
 bool cap_mint(uint32_t dest_slot, uint32_t src_slot, uint32_t new_rights);
 bool cap_transfer(uint32_t dest_slot, uint32_t src_slot);
 bool cap_move(uint32_t dest_slot, uint32_t src_slot);
