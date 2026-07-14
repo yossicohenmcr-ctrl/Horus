@@ -341,11 +341,21 @@ static void h_kill(struct regs *r) {
         r->eax = (uint32_t)SYS_ERR_INVAL;
         return;
     }
+    /* Authorize and terminate as ONE cap_lock critical section. Revocation
+     * (SYS_CAP_REVOKE / cap_revoke_global) always runs under cap_lock, so
+     * holding it here means a concurrent revoke on another CPU cannot land
+     * between the authority check and the teardown and strip the CAP_TCB/admin
+     * cap we just validated (the SMP TOCTOU on raw cap pointers). task_teardown
+     * takes no locks, so bracketing it with cap_lock cannot deadlock; cap_lookup
+     * (via task_kill_authorized) does not take cap_lock either, so no recursion. */
+    spin_lock(&cap_lock);
     if (!task_kill_authorized(target)) {
+        spin_unlock(&cap_lock);
         r->eax = (uint32_t)SYS_ERR_PERM;
         return;
     }
     task_teardown(target);
+    spin_unlock(&cap_lock);
     r->eax = 0;
 }
 
@@ -383,7 +393,16 @@ static void h_signal(struct regs *r) {
         r->eax = (uint32_t)SYS_ERR_INVAL; return;
     }
     if (signum == 0 || signum > SIG_MAX) { r->eax = (uint32_t)SYS_ERR_INVAL; return; }
-    if (!task_kill_authorized(target))   { r->eax = (uint32_t)SYS_ERR_PERM;  return; }
+    /* Authorize + deliver as ONE cap_lock critical section, exactly as SYS_KILL:
+     * a concurrent revoke (always under cap_lock) then cannot strip the
+     * authorizing cap between the check and the effect (SMP TOCTOU). The effect
+     * — task_teardown, the pending_sigs store, and signal_interrupt_wait — takes
+     * no locks, so holding cap_lock across it cannot deadlock. */
+    spin_lock(&cap_lock);
+    if (!task_kill_authorized(target)) {
+        spin_unlock(&cap_lock);
+        r->eax = (uint32_t)SYS_ERR_PERM; return;
+    }
 
     if (signum == SIG_KILL || tasks[target].sig_handler == 0) {
         task_teardown(target);                 /* default action: terminate */
@@ -396,6 +415,7 @@ static void h_signal(struct regs *r) {
             signal_interrupt_wait(target);
         }
     }
+    spin_unlock(&cap_lock);
     r->eax = 0;
 }
 
@@ -569,21 +589,34 @@ static void h_cap_grant(struct regs *r) {
     if (!tasks[cur].cspace || !tasks[target].cspace) {
         r->eax = (uint32_t)SYS_ERR_INVAL; return;
     }
+    /* Allocate the fresh serial up-front: cap_alloc_fresh_serial() grabs cap_lock
+     * itself and the lock is not recursive, so it must run OUTSIDE the critical
+     * section below. A serial burned on a subsequently-denied grant is harmless
+     * (serials are freshness tokens from a wrapping counter, not a scarce id). */
+    uint32_t fresh = cap_alloc_fresh_serial();
+
+    /* Authorize, snapshot the source, and install into the target as ONE cap_lock
+     * critical section. Revocation always runs under cap_lock, so a concurrent
+     * revoke on another CPU cannot (a) strip the CAP_TCB/admin authority between
+     * the check and the install, nor (b) invalidate `src` between the lookup and
+     * the copy (the SMP TOCTOU on raw cap pointers). cap_lookup does not take
+     * cap_lock, so calling it here does not recurse; audit_log runs after the
+     * unlock so no audit-subsystem lock nests under cap_lock. */
+    spin_lock(&cap_lock);
     /* Same authority as SYS_KILL: a CAP_TCB to the target, or admin. */
     if (!task_kill_authorized(target)) {
+        spin_unlock(&cap_lock);
         audit_log(AUDIT_CAP_TRANSFER, (uint32_t)target, -1, "cap grant denied");
         r->eax = (uint32_t)SYS_ERR_PERM; return;
     }
     /* The source must be a live capability the caller actually holds. */
     struct capability *src = cap_lookup(src_slot, 0);
     if (!src || src->type == CAP_NULL) {
+        spin_unlock(&cap_lock);
         r->eax = (uint32_t)SYS_ERR_NOENT; return;
     }
-    capability_t granted = *src;                 /* snapshot before taking cap_lock */
-    uint32_t fresh = cap_alloc_fresh_serial();   /* grabs cap_lock itself; call first */
+    capability_t granted = *src;
     granted.serial = fresh;
-
-    spin_lock(&cap_lock);
     tasks[target].cspace[dest_slot] = granted;
     spin_unlock(&cap_lock);
 
