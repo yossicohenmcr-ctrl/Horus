@@ -692,7 +692,7 @@ reproducible-build:
 verify-build: reproducible-build
 	@echo "Verify complete."
 
-.PHONY: security security-blocking security-advisory security-install semgrep trivy gitleaks cppcheck flawfinder cargo-audit
+.PHONY: security security-blocking security-advisory security-install install-trivy install-gitleaks semgrep trivy gitleaks cppcheck flawfinder cargo-audit
 
 # Full local scan: the blocking gates first (so a real finding stops you before
 # the advisory noise), then the advisory scanners.
@@ -709,19 +709,38 @@ security-blocking: semgrep gitleaks
 # Advisory scanners: reported for review but never fail the build.
 security-advisory: trivy cppcheck flawfinder cargo-audit
 
-security-install:
+# Pinned tool versions + SHA-256 digests, matching the CI security job so a local
+# `make security` installs exactly what CI gates with — and NEVER via an
+# unverified `curl | sh` (the previous local installer piped a remote script into
+# a root shell; the Trivy digest below is the same one ci.yml verifies).
+TRIVY_VERSION    := 0.72.0
+TRIVY_SHA256     := bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea
+GITLEAKS_VERSION := 8.21.0
+GITLEAKS_SHA256  := 6c3a240509647225997d31df06e872350e1c0fe2fb85d323ae29a9fef0012586
+
+install-trivy:
+	@echo "=== installing Trivy $(TRIVY_VERSION) (pinned, SHA-256 verified) ==="
+	curl -sfL https://github.com/aquasecurity/trivy/releases/download/v$(TRIVY_VERSION)/trivy_$(TRIVY_VERSION)_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
+	echo "$(TRIVY_SHA256)  /tmp/trivy.tar.gz" | sha256sum --check
+	tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+	sudo mv /tmp/trivy /usr/local/bin/ && rm -f /tmp/trivy.tar.gz
+
+install-gitleaks:
+	@echo "=== installing gitleaks $(GITLEAKS_VERSION) (pinned, SHA-256 verified) ==="
+	curl -sfL https://github.com/gitleaks/gitleaks/releases/download/v$(GITLEAKS_VERSION)/gitleaks_$(GITLEAKS_VERSION)_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+	echo "$(GITLEAKS_SHA256)  /tmp/gitleaks.tar.gz" | sha256sum --check
+	sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks && rm -f /tmp/gitleaks.tar.gz
+
+security-install: install-trivy install-gitleaks
 	@echo "Installing security tools (this may require sudo)..."
 	sudo apt-get update
 	sudo apt-get install -y cppcheck flawfinder
-	# Semgrep
+	# Semgrep (pipx isolates it; PyPI download is TLS + hash verified) — CI installs
+	# it the same way. cargo-audit resolves through Cargo's checksum-verified index.
 	pipx install semgrep || pip install --user semgrep
-	# Trivy (official install script)
-	curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
-	# gitleaks (via Go)
-	go install github.com/gitleaks/gitleaks@latest || echo "⚠️  Install Go to get gitleaks binary"
-	# cargo-audit for Rust
-	cargo install cargo-audit || true
-	@echo "Installation finished. You may need to add ~/.local/bin or /usr/local/bin to your PATH."
+	cargo install cargo-audit --locked || true
+	@echo "Installation finished. Trivy + gitleaks were pinned and SHA-256 verified above."
+	@echo "You may need to add ~/.local/bin or /usr/local/bin to your PATH."
 
 semgrep:
 	@echo "=== Semgrep (C + Rust + security rules) ==="
@@ -731,18 +750,13 @@ semgrep:
 
 trivy:
 	@echo "=== Trivy (secrets + misconfigs + vulns) ==="
-	command -v trivy >/dev/null 2>&1 || (curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin)
+	command -v trivy >/dev/null 2>&1 || $(MAKE) install-trivy
 	trivy --version
 	trivy fs --scanners vuln,secret,misconfig .
 
 gitleaks:
 	@echo "=== gitleaks (secrets in git history) ==="
-	command -v gitleaks >/dev/null 2>&1 || \
-	( \
-		GITLEAKS_VERSION=8.30.1; \
-		curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v$${GITLEAKS_VERSION}/gitleaks_$${GITLEAKS_VERSION}_linux_x64.tar.gz | \
-		sudo tar -xz -C /usr/local/bin gitleaks \
-	)
+	command -v gitleaks >/dev/null 2>&1 || $(MAKE) install-gitleaks
 	gitleaks detect --source . --verbose   # BLOCKING: non-zero exit on any secret (allowlist in .gitleaks.toml)
 
 cppcheck:
