@@ -13,7 +13,7 @@ This document covers toolchain requirements, build targets, build flags, and how
 | GCC | C compiler and assembler driver | 9.x |
 | GNU Binutils (`ld`, `objcopy`) | Linker and binary tools | 2.34 |
 | GNU Make | Build system | 4.x |
-| Rust + Cargo | Rust security core | stable (2021 edition) |
+| Rust + Cargo | Rust security core | pinned by `rust-toolchain.toml` (currently 1.96.1, 2021 edition) |
 
 ### Required for ISO and QEMU
 
@@ -39,8 +39,39 @@ sudo apt-get install \
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
-rustup target add x86_64-unknown-none
 ```
+
+You do **not** need to run `rustup target add` or `rustup component add`
+manually: `rust-toolchain.toml` at the repo root pins the exact compiler
+version, the `clippy` component, and the `x86_64-unknown-none` target, and
+`rustup` installs all three automatically the first time you run `cargo` or
+`make` inside the tree.
+
+---
+
+## Reproducible / hermetic builds
+
+`make reproducible-build` builds `kernel.elf` twice from clean and the CI
+`reproducible` job fails unless the two are byte-for-byte identical. For that
+guarantee to hold *across time* (not just within one machine), the build inputs
+are pinned:
+
+- **Rust toolchain** — `rust-toolchain.toml` pins the compiler version,
+  components, and target. Every developer and every CI job builds with the exact
+  compiler that produced the audited binaries. Bumping it is a deliberate,
+  reviewed change: edit `channel`, rebuild, and confirm `reproducible` still
+  passes.
+- **C toolchain** — CI runs on the pinned `ubuntu-24.04` runner image (not the
+  floating `ubuntu-latest`), so gcc / binutils / grub / xorriso do not drift.
+- **Build flags** — the Makefile already strips non-determinism: a fixed
+  `-frandom-seed`, `-fdebug-prefix-map` to a stable path, `--build-id=none`, and
+  the Rust release profile's `codegen-units = 1` / `lto` / `strip`.
+
+A fully sealed build (a container or Nix flake that also pins apt package patch
+versions) is intentionally **not** added yet: it is a large new dependency, and
+the toolchain pins above plus the reproducibility flags already make the audited
+artifact deterministic. Pinning apt patch versions within the fixed image is the
+remaining residual, tracked for a later hardening pass.
 
 ---
 

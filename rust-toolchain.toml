@@ -1,0 +1,15 @@
+# Pin the Rust toolchain exactly so the build is hermetic and the
+# reproducible-build check (CI `reproducible` job) holds across time, not just
+# within a single runner. rustup reads this file automatically for every cargo/
+# rustc/clippy invocation under the repo and installs the named toolchain,
+# components, and target on first use -- so CI no longer needs a `rustup
+# component add` / `rustup target add` step, and every developer builds with the
+# same compiler that produced the audited binaries.
+#
+# Bumping the compiler is a deliberate, reviewed change: update `channel` here,
+# rebuild, and confirm the `reproducible` job still passes.
+[toolchain]
+channel = "1.96.1"
+components = ["clippy"]
+targets = ["x86_64-unknown-none"]
+profile = "minimal"

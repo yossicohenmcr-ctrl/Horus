@@ -21,10 +21,15 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# Hermetic build inputs are pinned so the `reproducible` job holds across time,
+# not just within a single run: the Rust toolchain (version, clippy, bare-metal
+# target) is pinned by rust-toolchain.toml, and the runner image is pinned to
+# ubuntu-24.04 rather than the floating ubuntu-latest so the C toolchain
+# (gcc/binutils/grub/xorriso) does not drift under the build. See docs/BUILDING.md.
 jobs:
   rust:
     name: Rust unit tests + clippy (deny-warnings gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install clippy component
@@ -38,7 +43,7 @@ jobs:
 
   kernel:
     name: Build kernel.elf + bootable ISO (x86_64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain
@@ -69,7 +74,7 @@ jobs:
   # enough to catch that; -Werror=vla in CFLAGS also gates here.
   altconfigs:
     name: Build alternate configs (${{ matrix.config }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +95,7 @@ jobs:
 
   smoke:
     name: QEMU smoke-boot (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -107,7 +112,7 @@ jobs:
 
   smoke-elf:
     name: QEMU ELF-loader W^X self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -124,7 +129,7 @@ jobs:
 
   smoke-preempt:
     name: QEMU preemptive-scheduling self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -141,7 +146,7 @@ jobs:
 
   smoke-signal:
     name: QEMU signal-handling self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -158,7 +163,7 @@ jobs:
 
   smoke-smp:
     name: QEMU SMP self-test (headless, -smp 4)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -175,7 +180,7 @@ jobs:
 
   smoke-proc:
     name: QEMU process-control self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -192,7 +197,7 @@ jobs:
 
   smoke-notify:
     name: QEMU async-notification self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -209,7 +214,7 @@ jobs:
 
   smoke-session:
     name: Scripted integration session (headless, drives the real shell)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -226,7 +231,7 @@ jobs:
 
   smoke-fs:
     name: QEMU filesystem self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -243,7 +248,7 @@ jobs:
 
   smoke-fs-perms:
     name: QEMU filesystem permissions self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -260,7 +265,7 @@ jobs:
 
   smoke-fs-conc:
     name: QEMU filesystem multi-client concurrency self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -277,7 +282,7 @@ jobs:
 
   smoke-fs-persist:
     name: QEMU filesystem persistence self-test (two-boot, headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -294,7 +299,7 @@ jobs:
 
   smoke-fs-wal:
     name: QEMU filesystem journal crash-recovery self-test (two-boot, headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -311,7 +316,7 @@ jobs:
 
   smoke-fs-large:
     name: QEMU large-file (double-indirect) self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -328,7 +333,7 @@ jobs:
 
   smoke-newlib:
     name: QEMU newlib libc self-test (headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain + QEMU
@@ -355,7 +360,7 @@ jobs:
 
   reproducible:
     name: Verify reproducible kernel build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Install build toolchain
@@ -388,7 +393,7 @@ jobs:
   # step still runs.
   security:
     name: Security scans + SBOM (gitleaks + Semgrep ERROR block; rest advisory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
@@ -438,7 +443,7 @@ jobs:
 
   tla:
     name: TLA+ model checking (cap algebra + paging isolation)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
