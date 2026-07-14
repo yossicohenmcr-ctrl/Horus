@@ -801,6 +801,8 @@ verify-tla: $(TLA_TOOLS_JAR)
 	cd docs && java -cp ../$(TLA_TOOLS_JAR) tlc2.TLC -config cap_algebra.cfg cap_algebra.tla
 	@echo "=== TLC: docs/paging_isolation.tla (per-task frame isolation) ==="
 	cd docs && java -cp ../$(TLA_TOOLS_JAR) tlc2.TLC -config paging_isolation.cfg paging_isolation.tla
+	@echo "=== TLC: docs/cap_seqlock.tla (two-CPU seqlock: no torn capability read) ==="
+	cd docs && java -cp ../$(TLA_TOOLS_JAR) tlc2.TLC -config cap_seqlock.cfg cap_seqlock.tla
 	@echo "✅ TLA+ specs model-checked: all invariants hold."
 
 .PHONY: verify-tla

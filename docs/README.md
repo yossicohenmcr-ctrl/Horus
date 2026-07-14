@@ -16,6 +16,7 @@ Formal specifications:
 |---|---|
 | [cap_algebra.tla](cap_algebra.tla) | TLA+ spec of the capability algebra (mint/transfer/revoke); TLC-checked in CI against a real subset-rights non-escalation invariant (model in `cap_algebra.cfg`, run via `make verify-tla`) |
 | [paging_isolation.tla](paging_isolation.tla) | TLA+ spec of per-task address-space isolation; TLC-checked in CI that no user frame is mapped into two tasks and no user mapping reaches kernel memory (model in `paging_isolation.cfg`) |
+| [cap_seqlock.tla](cap_seqlock.tla) | TLA+ spec of the two-CPU `cap_seq` seqlock behind lock-free `cap_lookup` (audit finding 3.1); TLC-checked in CI that a committed lock-free read never observes a torn capability while another CPU mutates cspaces under `cap_lock` (model in `cap_seqlock.cfg`) |
 
 Templates:
 

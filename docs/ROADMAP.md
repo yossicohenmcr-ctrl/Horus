@@ -59,7 +59,7 @@ five runtime self-tests in CI. Already in place:
   `smoke-fs-wal`, `smoke-fs-large`, `smoke-newlib`), the scripted
   `smoke-session` integration test, a `reproducible` build check, a
   `security` SAST/SBOM scan, and a `tla` TLA+ model-checking job (TLC verifies
-  the capability-algebra and paging-isolation invariants). The whole filesystem suite (persistence,
+  the capability-algebra, paging-isolation, and two-CPU seqlock invariants). The whole filesystem suite (persistence,
   permissions, concurrency, journal crash-recovery, large files), the newlib
   libc port, and async notifications are now CI-enforced, not local-only.
 
@@ -255,10 +255,10 @@ Cross-cutting work that should grow alongside every other phase.
   round-trips) and grow the assertion vocabulary.
 - **Fuzzing**: coverage-guided fuzzing (libFuzzer or AFL++) of the syscall
   interface and the Rust FFI boundary.
-- **Model checking**: TLC now checks both TLA+ specifications (`docs/cap_algebra.tla`
-  subset-rights non-escalation, `docs/paging_isolation.tla` per-task frame isolation)
-  in CI (`tla` job). The next step is to extend them to cover IPC, the scheduler,
-  and SMP interactions.
+- **Model checking**: TLC now checks three TLA+ specifications (`docs/cap_algebra.tla`
+  subset-rights non-escalation, `docs/paging_isolation.tla` per-task frame isolation,
+  `docs/cap_seqlock.tla` two-CPU seqlock no-torn-read) in CI (`tla` job). The next
+  step is to extend them to cover IPC and the scheduler.
 - **Formal verification**: apply Verus or Kani to the capability operations in
   `rust/src/capability.rs`.
 - **User/kernel address separation**: the kernel is linked low (1 MiB) and its

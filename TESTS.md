@@ -109,7 +109,7 @@ help
 18. **smoke-session** — `make smoke-session` (drives the real ring-3 shell over serial: auth + least-privilege enforcement)
 19. **reproducible** — builds `kernel.elf` twice and fails if they are not byte-for-byte identical
 20. **security** — Semgrep, Trivy, gitleaks, cppcheck, flawfinder, `cargo-audit`, and a CycloneDX SBOM (advisory)
-21. **tla** — `make verify-tla`: TLC model-checks `docs/cap_algebra.tla` (subset-rights non-escalation) and `docs/paging_isolation.tla` (per-task frame isolation); a violated invariant fails the build
+21. **tla** — `make verify-tla`: TLC model-checks `docs/cap_algebra.tla` (subset-rights non-escalation), `docs/paging_isolation.tla` (per-task frame isolation), and `docs/cap_seqlock.tla` (two-CPU seqlock: no torn capability read); a violated invariant fails the build
 
 That is three build/lint jobs, fourteen headless QEMU self-tests (items 4–17) plus the scripted `smoke-session` integration test, and the reproducible-build, security, and TLA+ model-checking jobs. All but the security job use only first-party / pinned actions. **These counts are enforced:** `tools/check_doc_counts.sh` fails CI if the number of `#[test]`s or `ci.yml` jobs drifts from the marker at the top of this file or from any tracked doc.
 
