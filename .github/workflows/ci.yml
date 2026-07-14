@@ -464,6 +464,10 @@ jobs:
           if-no-files-found: warn
 
   tla:
+    # NOTE: this job's `name` is a REQUIRED branch-protection status-check context
+    # (matched verbatim). Do not rename it or the required check will hang forever
+    # as "Expected — Waiting for status to be reported". New specs go in the step
+    # below, not in this name. (The seqlock spec was added this way.)
     name: TLA+ model checking (cap algebra + paging isolation)
     runs-on: ubuntu-24.04
     steps:
@@ -476,8 +480,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y default-jre-headless
 
-      # BLOCKING gate: TLC exhaustively checks both specs' safety invariants and
+      # BLOCKING gate: TLC exhaustively checks each spec's safety invariants and
       # exits non-zero (12) on any violation. The specs are real and falsifiable
-      # (subset-rights non-escalation; per-task frame isolation), not decorative.
-      - name: Model-check TLA+ specs
+      # (subset-rights non-escalation; per-task frame isolation; and the two-CPU
+      # seqlock's no-torn-capability-read property), not decorative.
+      - name: Model-check TLA+ specs (cap algebra + paging isolation + seqlock)
         run: make verify-tla
