@@ -466,4 +466,58 @@ mod tests {
             "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00");
         assert!(!verify(&pk, &sig, &[0x72u8]), "valid sig under the wrong key must fail");
     }
+
+    // ---- property/differential fuzz (zero-dependency; see rust/src/fuzzrng.rs) ----
+
+    // Arbitrary 32-byte keys, 64-byte signatures, and messages must never panic
+    // the verifier (non-curve-point decompression, non-canonical y-coordinates,
+    // arbitrary scalar S past the group order) and must fail closed.
+    #[test]
+    fn fuzz_verify_never_panics_and_rejects_garbage() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0xED25_0001_0001);
+        let mut accepted = 0u64;
+        for _ in 0..600 {
+            let mut pk = [0u8; 32];
+            let mut sig = [0u8; 64];
+            r.fill(&mut pk);
+            r.fill(&mut sig);
+            let mlen = r.below(97) as usize;
+            let mut msg = [0u8; 96];
+            r.fill(&mut msg[..mlen]);
+            if verify(&pk, &sig, &msg[..mlen]) {
+                accepted += 1;
+            }
+        }
+        // A random (key, signature) verifying a random message is astronomically
+        // unlikely; any acceptance would indicate a broken check.
+        assert_eq!(accepted, 0, "random garbage must not verify");
+    }
+
+    // Differential: a genuinely valid (key, signature, message) triple must be
+    // rejected under every single-bit mutation of any of the three.
+    #[test]
+    fn fuzz_mutated_valid_triple_always_rejected() {
+        use crate::fuzzrng::SplitMix64;
+        let pk: [u8; 32] = unhex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
+        let sig: [u8; 64] = unhex(
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00");
+        let msg = [0x72u8];
+        assert!(verify(&pk, &sig, &msg), "baseline vector must verify");
+        let mut r = SplitMix64::new(0x00ED_2519_0002);
+        for _ in 0..800 {
+            let mut pk2 = pk;
+            let mut sig2 = sig;
+            let mut msg2 = msg;
+            match r.below(3) {
+                0 => pk2[r.below(32) as usize] ^= 1u8 << r.below(8),
+                1 => sig2[r.below(64) as usize] ^= 1u8 << r.below(8),
+                _ => msg2[0] ^= 1u8 << r.below(8),
+            }
+            assert!(
+                !verify(&pk2, &sig2, &msg2),
+                "a single-bit-mutated valid triple must never verify"
+            );
+        }
+    }
 }

@@ -257,4 +257,110 @@ mod tests {
         // Different nonce => different keystream => different ciphertext.
         assert_ne!(a, b);
     }
+
+    // ---- property/differential fuzz (zero-dependency; see rust/src/fuzzrng.rs) ----
+
+    // Random keys/nonce/aad/plaintext of random lengths: an authentic open after
+    // seal always recovers the exact plaintext, and neither seal nor open panics.
+    #[test]
+    fn fuzz_seal_open_roundtrip() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0xAEAD_0001);
+        for _ in 0..20000 {
+            let mut ek = [0u8; 32];
+            let mut mk = [0u8; 32];
+            let mut nc = [0u8; AEAD_NONCE_LEN];
+            r.fill(&mut ek);
+            r.fill(&mut mk);
+            r.fill(&mut nc);
+            let plen = r.below(65) as usize;
+            let mut plain = [0u8; 64];
+            r.fill(&mut plain[..plen]);
+            let alen = r.below(33) as usize;
+            let mut aad = [0u8; 32];
+            r.fill(&mut aad[..alen]);
+
+            let mut buf = plain;
+            let tag = seal(&ek, &mk, &nc, &aad[..alen], &mut buf[..plen]);
+            assert!(open(&ek, &mk, &nc, &aad[..alen], &mut buf[..plen], &tag));
+            assert_eq!(buf[..plen], plain[..plen]);
+        }
+    }
+
+    // Every single-bit mutation of a MAC-covered input (mac_key, nonce, aad,
+    // ciphertext, or tag) must make open fail closed and zero the buffer. enc_key
+    // is deliberately excluded: it is not in the MAC (HMAC over nonce‖aad‖ct), so
+    // corrupting it authenticates but decrypts to garbage — an Encrypt-then-MAC
+    // property, not a defect.
+    #[test]
+    fn fuzz_open_fails_closed_on_mac_covered_mutation() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0xAEAD_0002);
+        for _ in 0..20000 {
+            let mut ek = [0u8; 32];
+            let mut mk = [0u8; 32];
+            let mut nc = [0u8; AEAD_NONCE_LEN];
+            r.fill(&mut ek);
+            r.fill(&mut mk);
+            r.fill(&mut nc);
+            let plen = 1 + r.below(64) as usize; // >=1 so the ciphertext arm is live
+            let mut plain = [0u8; 64];
+            r.fill(&mut plain[..plen]);
+            let alen = 1 + r.below(31) as usize; // >=1 so the aad arm is live
+            let mut aad = [0u8; 32];
+            r.fill(&mut aad[..alen]);
+
+            let mut ct = plain;
+            let tag = seal(&ek, &mk, &nc, &aad[..alen], &mut ct[..plen]);
+
+            let mut mk2 = mk;
+            let mut nc2 = nc;
+            let mut aad2 = aad;
+            let mut ct2 = ct;
+            let mut tag2 = tag;
+            match r.below(5) {
+                0 => mk2[r.below(32) as usize] ^= 1u8 << r.below(8),
+                1 => nc2[r.below(AEAD_NONCE_LEN as u32) as usize] ^= 1u8 << r.below(8),
+                2 => aad2[r.below(alen as u32) as usize] ^= 1u8 << r.below(8),
+                3 => ct2[r.below(plen as u32) as usize] ^= 1u8 << r.below(8),
+                _ => tag2[r.below(AEAD_TAG_LEN as u32) as usize] ^= 1u8 << r.below(8),
+            }
+
+            let mut dec = ct2;
+            let ok = open(&ek, &mk2, &nc2, &aad2[..alen], &mut dec[..plen], &tag2);
+            assert!(!ok, "single-bit mutation of a MAC-covered input must fail closed");
+            assert!(
+                dec[..plen].iter().all(|&b| b == 0),
+                "a rejected plaintext must be zeroed, not leaked"
+            );
+        }
+    }
+
+    // Random garbage handed to open must never authenticate and never panic.
+    #[test]
+    fn fuzz_open_rejects_random_garbage() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0xAEAD_0003);
+        let mut authed = 0u64;
+        for _ in 0..20000 {
+            let mut ek = [0u8; 32];
+            let mut mk = [0u8; 32];
+            let mut nc = [0u8; AEAD_NONCE_LEN];
+            let mut tag = [0u8; AEAD_TAG_LEN];
+            r.fill(&mut ek);
+            r.fill(&mut mk);
+            r.fill(&mut nc);
+            r.fill(&mut tag);
+            let plen = r.below(65) as usize;
+            let mut buf = [0u8; 64];
+            r.fill(&mut buf[..plen]);
+            let alen = r.below(33) as usize;
+            let mut aad = [0u8; 32];
+            r.fill(&mut aad[..alen]);
+            if open(&ek, &mk, &nc, &aad[..alen], &mut buf[..plen], &tag) {
+                authed += 1;
+            }
+        }
+        assert_eq!(authed, 0, "a random 16-byte tag must not authenticate");
+    }
 }

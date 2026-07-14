@@ -31,6 +31,6 @@ Project-level documents (at the repository root):
 |---|---|
 | [README.md](../README.md) | Build quick start, status-at-a-glance table, project overview |
 | [SECURITY.md](../SECURITY.md) | Security policy, current posture, hardening in place, reporting |
-| [TESTS.md](../TESTS.md) | Test coverage today (74 Rust unit tests, 22 CI jobs) and what is still needed — the source of truth for both counts |
+| [TESTS.md](../TESTS.md) | Test coverage today (84 Rust unit tests, 22 CI jobs) and what is still needed — the source of truth for both counts |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up and submit work |
 | [CHANGES.md](../CHANGES.md) | Changelog (`main` branch state) |

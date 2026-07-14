@@ -140,6 +140,51 @@ pub unsafe extern "C" fn rust_free_user_physical_page(
 mod tests {
     use super::*;
 
+    // ---- property fuzz (zero-dependency; see rust/src/fuzzrng.rs) ----
+
+    // The user-physical-page bounds check must exactly match its specification
+    // for every 32-bit address (below the base, in range, and past the top) and
+    // must never panic on the boundary subtraction/division.
+    #[test]
+    fn fuzz_valid_user_phys_matches_spec() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0x000E_A000_0001);
+        for _ in 0..200000 {
+            // Bias toward in-range addresses so both branches are exercised.
+            let phys = if r.below(2) == 0 {
+                r.next_u32()
+            } else {
+                USER_PHYS_BASE.wrapping_add(r.below(USER_PHYS_PAGES * PAGE_SIZE))
+            };
+            let n_pages = if r.below(4) == 0 { r.next_u32() } else { USER_PHYS_PAGES };
+            let expect = n_pages == USER_PHYS_PAGES
+                && phys >= USER_PHYS_BASE
+                && (phys - USER_PHYS_BASE) / PAGE_SIZE < n_pages;
+            let got = unsafe { rust_page_is_valid_user_phys(phys, n_pages) };
+            assert_eq!(got, expect, "phys={phys:#x} n_pages={n_pages}");
+        }
+    }
+
+    // The (pointer, length) trust boundary: inc/dec against a table that was
+    // never registered — or whose length disagrees — must be refused before any
+    // indexing, returning 0 / -1 for arbitrary phys and never dereferencing.
+    #[test]
+    fn fuzz_refcount_rejects_unregistered_table() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0x000E_A000_0002);
+        let mut table = [0u16; 32]; // deliberately NOT the registered table
+        for _ in 0..100000 {
+            let phys = r.next_u32();
+            let n_pages = if r.below(2) == 0 { r.next_u32() } else { USER_PHYS_PAGES };
+            unsafe {
+                // A local, unregistered pointer can never equal the global
+                // REFC_PTR, so refc_table_ok fails and no indexing occurs.
+                assert_eq!(rust_page_ref_inc(phys, table.as_mut_ptr(), n_pages), 0);
+                assert_eq!(rust_page_ref_dec(phys, table.as_mut_ptr(), n_pages), -1);
+            }
+        }
+    }
+
     const N: u32 = USER_PHYS_PAGES;
     fn phys_of(page: u32) -> u32 {
         USER_PHYS_BASE + page * PAGE_SIZE
