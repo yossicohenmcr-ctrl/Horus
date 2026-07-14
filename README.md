@@ -132,7 +132,7 @@ Full posture and threat model: **[SECURITY.md](SECURITY.md)**.
 | Disk-backed persistent storage (ATA probe at boot; RAM vdisk fallback) | ✅ Working |
 | newlib libc port over a per-process POSIX fd layer (`malloc`/`sbrk`/`brk`) | ✅ Working |
 | Symmetric multiprocessing (AP bringup, per-CPU scheduler, TLB-shootdown IPIs) | ✅ Working *(behind `SMP=1`)* |
-| Rust security-core unit tests (63) + GitHub Actions CI (20 gated jobs) | ✅ Working |
+| Rust security-core unit tests (63) + GitHub Actions CI (21 gated jobs) | ✅ Working |
 | Headless QEMU self-tests: boot, ELF/W^X, preemption, signals, process-control, notifications, SMP, fs (×6), newlib | ✅ Working |
 | Scripted integration session: drives the real ring-3 shell over serial (auth + least privilege) | ✅ Working |
 | Reproducible builds | ✅ Working |

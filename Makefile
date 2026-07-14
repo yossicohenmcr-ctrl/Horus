@@ -760,3 +760,33 @@ flawfinder:
 cargo-audit:
 	@echo "=== cargo-audit (Rust dependency advisories) ==="
 	(cd rust && cargo audit) || echo "cargo-audit not installed or no advisories found"
+
+# ---------------------------------------------------------------------------
+# Formal verification: model-check the TLA+ specs in docs/ with TLC.
+#
+# Both specs carry real, falsifiable safety invariants (cap_algebra: subset-
+# rights non-escalation; paging_isolation: per-task frame isolation). TLC
+# exits 0 when every reachable state satisfies the invariants and 12 on a
+# violation, so this is a hard CI gate. The tla2tools.jar is pinned by version
+# and verified by SHA-256 (same discipline as the Trivy/gitleaks downloads);
+# it is git-ignored, not committed. Requires a JRE on PATH (CI installs one).
+# ---------------------------------------------------------------------------
+TLA_TOOLS_VERSION := 1.8.0
+TLA_TOOLS_JAR     := tla2tools.jar
+TLA_TOOLS_SHA256  := 150b0294c3d407c15f0c971351ccd4ae8c6d885397546dff87871a14be2b4ee4
+TLA_TOOLS_URL     := https://github.com/tlaplus/tlaplus/releases/download/v$(TLA_TOOLS_VERSION)/$(TLA_TOOLS_JAR)
+
+$(TLA_TOOLS_JAR):
+	@echo "=== fetching pinned tla2tools $(TLA_TOOLS_VERSION) (SHA-256 verified) ==="
+	curl -fsSL -o $@ $(TLA_TOOLS_URL)
+	echo "$(TLA_TOOLS_SHA256)  $@" | sha256sum --check
+
+verify-tla: $(TLA_TOOLS_JAR)
+	@command -v java >/dev/null 2>&1 || { echo "verify-tla: no 'java' on PATH — install a JRE (CI: default-jre-headless)"; exit 1; }
+	@echo "=== TLC: docs/cap_algebra.tla (subset-rights non-escalation) ==="
+	cd docs && java -cp ../$(TLA_TOOLS_JAR) tlc2.TLC -config cap_algebra.cfg cap_algebra.tla
+	@echo "=== TLC: docs/paging_isolation.tla (per-task frame isolation) ==="
+	cd docs && java -cp ../$(TLA_TOOLS_JAR) tlc2.TLC -config paging_isolation.cfg paging_isolation.tla
+	@echo "✅ TLA+ specs model-checked: all invariants hold."
+
+.PHONY: verify-tla

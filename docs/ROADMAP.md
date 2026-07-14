@@ -51,14 +51,15 @@ five runtime self-tests in CI. Already in place:
 - **Userspace runtime** — a demand-paged heap via `sbrk`/`brk`, a userspace
   `malloc`, and a newlib libc port over a per-process POSIX fd layer
   (`make smoke-newlib`).
-- **CI** — twenty gated jobs: `rust` (`cargo test` + `clippy -D warnings`),
+- **CI** — 21 gated jobs: `rust` (`cargo test` + `clippy -D warnings`),
   `kernel` (build + ISO), `altconfigs` (DEBUG_SHELL/MINIMAL_SECURE matrix), the
   headless QEMU boot `smoke`, thirteen runtime self-tests (`smoke-elf`,
   `smoke-preempt`, `smoke-signal`, `smoke-proc`, `smoke-notify`, `smoke-smp`,
   `smoke-fs`, `smoke-fs-perms`, `smoke-fs-conc`, `smoke-fs-persist`,
   `smoke-fs-wal`, `smoke-fs-large`, `smoke-newlib`), the scripted
-  `smoke-session` integration test, a `reproducible` build check, and a
-  `security` SAST/SBOM scan. The whole filesystem suite (persistence,
+  `smoke-session` integration test, a `reproducible` build check, a
+  `security` SAST/SBOM scan, and a `tla` TLA+ model-checking job (TLC verifies
+  the capability-algebra and paging-isolation invariants). The whole filesystem suite (persistence,
   permissions, concurrency, journal crash-recovery, large files), the newlib
   libc port, and async notifications are now CI-enforced, not local-only.
 
@@ -254,9 +255,10 @@ Cross-cutting work that should grow alongside every other phase.
   round-trips) and grow the assertion vocabulary.
 - **Fuzzing**: coverage-guided fuzzing (libFuzzer or AFL++) of the syscall
   interface and the Rust FFI boundary.
-- **Model checking**: extend the TLA+ specifications (`docs/cap_algebra.tla`,
-  `docs/paging_isolation.tla`) to cover IPC, the scheduler, and SMP interactions,
-  and wire a checker into CI.
+- **Model checking**: TLC now checks both TLA+ specifications (`docs/cap_algebra.tla`
+  subset-rights non-escalation, `docs/paging_isolation.tla` per-task frame isolation)
+  in CI (`tla` job). The next step is to extend them to cover IPC, the scheduler,
+  and SMP interactions.
 - **Formal verification**: apply Verus or Kani to the capability operations in
   `rust/src/capability.rs`.
 - **User/kernel address separation**: the kernel is linked low (1 MiB) and its

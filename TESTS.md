@@ -2,14 +2,14 @@
 
 ## Current state
 
-<!-- doc-counts: rust_unit_tests=63 ci_jobs=20 -->
+<!-- doc-counts: rust_unit_tests=63 ci_jobs=21 -->
 <!-- This file is the single source of truth for the two headline metrics below.
      `tools/check_doc_counts.sh` (a CI step in the `rust` job) derives the real
      numbers from rust/src and .github/workflows/ci.yml and fails the build if
      this marker, or any tracked doc, disagrees. Bump the marker here when the
      counts change and the guard will point you at any doc left out of sync. -->
 
-The Rust security core has **63 unit tests**, and a CI pipeline gates every push and pull request (`.github/workflows/ci.yml`) with **20 jobs**. The **headless QEMU boot tests** run in CI: `make smoke` boots to the ring-3 login prompt with no fault, `make smoke-elf` boots a real multi-segment static-PIE ELF at a randomised base and asserts the loader enforced W^X **and** applied its `R_386_RELATIVE` relocation, `make smoke-preempt` asserts the timer time-slices two non-yielding ring-3 tasks, `make smoke-signal` faults a task on purpose and asserts its handler runs, `make smoke-proc` drives ring-3 process control (exit/kill/spawn/exec/grant/signal/wait/fault-wait), `make smoke-notify` asserts an async `SYS_NOTIFY` badge reaches a task blocked in `SYS_WAIT_NOTIFY`, `make smoke-smp` asserts the application processors come online and run tasks concurrently, and the filesystem/libc suite (`make smoke-fs`, plus `smoke-fs-persist`, `smoke-fs-perms`, `smoke-fs-conc`, `smoke-fs-wal`, `smoke-fs-large`, `smoke-newlib` for persistence, per-file permissions, multi-client concurrency, the write-ahead journal, large/double-indirect files, and the newlib libc port) is now gated too. Beyond the marker self-tests, `make smoke-session` drives the **real** ring-3 shell over serial through a scripted login/command session and asserts on the responses (`tools/session_test.py`). The delegated boot-through-`init` filesystem path (`smoke-init-fs`) remains a local target, and a coverage-guided fuzz harness is still the highest-value remaining contribution.
+The Rust security core has **63 unit tests**, and a CI pipeline gates every push and pull request (`.github/workflows/ci.yml`) with **21 jobs**. The **headless QEMU boot tests** run in CI: `make smoke` boots to the ring-3 login prompt with no fault, `make smoke-elf` boots a real multi-segment static-PIE ELF at a randomised base and asserts the loader enforced W^X **and** applied its `R_386_RELATIVE` relocation, `make smoke-preempt` asserts the timer time-slices two non-yielding ring-3 tasks, `make smoke-signal` faults a task on purpose and asserts its handler runs, `make smoke-proc` drives ring-3 process control (exit/kill/spawn/exec/grant/signal/wait/fault-wait), `make smoke-notify` asserts an async `SYS_NOTIFY` badge reaches a task blocked in `SYS_WAIT_NOTIFY`, `make smoke-smp` asserts the application processors come online and run tasks concurrently, and the filesystem/libc suite (`make smoke-fs`, plus `smoke-fs-persist`, `smoke-fs-perms`, `smoke-fs-conc`, `smoke-fs-wal`, `smoke-fs-large`, `smoke-newlib` for persistence, per-file permissions, multi-client concurrency, the write-ahead journal, large/double-indirect files, and the newlib libc port) is now gated too. Beyond the marker self-tests, `make smoke-session` drives the **real** ring-3 shell over serial through a scripted login/command session and asserts on the responses (`tools/session_test.py`). The delegated boot-through-`init` filesystem path (`smoke-init-fs`) remains a local target, and a coverage-guided fuzz harness is still the highest-value remaining contribution.
 
 ---
 
@@ -87,7 +87,7 @@ help
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs **20 jobs**, all hard gates:
+`.github/workflows/ci.yml` runs **21 jobs**, all hard gates:
 
 1. **rust** — `cargo test --release`, `cargo clippy --all-targets -- -D warnings`, and the `tools/check_doc_counts.sh` doc-count guard
 2. **kernel** — builds `kernel.elf` and a bootable ISO (x86-64) and uploads them as artifacts
@@ -109,8 +109,9 @@ help
 18. **smoke-session** — `make smoke-session` (drives the real ring-3 shell over serial: auth + least-privilege enforcement)
 19. **reproducible** — builds `kernel.elf` twice and fails if they are not byte-for-byte identical
 20. **security** — Semgrep, Trivy, gitleaks, cppcheck, flawfinder, `cargo-audit`, and a CycloneDX SBOM (advisory)
+21. **tla** — `make verify-tla`: TLC model-checks `docs/cap_algebra.tla` (subset-rights non-escalation) and `docs/paging_isolation.tla` (per-task frame isolation); a violated invariant fails the build
 
-That is three build/lint jobs, fourteen headless QEMU self-tests (items 4–17) plus the scripted `smoke-session` integration test, and the reproducible-build and security jobs. All but the security job use only first-party / pinned actions. **These counts are enforced:** `tools/check_doc_counts.sh` fails CI if the number of `#[test]`s or `ci.yml` jobs drifts from the marker at the top of this file or from any tracked doc.
+That is three build/lint jobs, fourteen headless QEMU self-tests (items 4–17) plus the scripted `smoke-session` integration test, and the reproducible-build, security, and TLA+ model-checking jobs. All but the security job use only first-party / pinned actions. **These counts are enforced:** `tools/check_doc_counts.sh` fails CI if the number of `#[test]`s or `ci.yml` jobs drifts from the marker at the top of this file or from any tracked doc.
 
 ---
 
@@ -121,10 +122,6 @@ The gaps that remain:
 ### Deeper booted-kernel integration tests
 
 `make smoke-session` (`tools/session_test.py`) seeds this: it drives the serial port through a scripted login/shell session and asserts on the responses — a failed then successful login, the kernel-attested identity via `whoami`, and a capability-gated admin op allowed for root but denied for a standard user. The remaining work is to broaden the scenarios (an ELF running under W^X, an IPC/FS round-trip, a capability revocation) and grow the assertion vocabulary. A coverage-guided fuzz harness over the syscall/FFI boundary is still absent.
-
-### TLA+ specs
-
-`docs/cap_algebra.tla` and `docs/paging_isolation.tla` model the capability and paging invariants but are not model-checked in CI. Wiring TLC/Apalache into the pipeline would close the loop.
 
 ### A real C-side test harness
 

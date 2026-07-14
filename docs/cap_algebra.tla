@@ -1,95 +1,139 @@
 -------------------------- MODULE cap_algebra --------------------------
+(***************************************************************************)
+(* Capability algebra: mint / transfer / revoke, with two REAL, machine-  *)
+(* checked safety invariants.                                             *)
+(*                                                                         *)
+(* This replaces an earlier decorative version whose `NoEscalation` was a  *)
+(* tautology (`rights <= 0xFFFFFFFF`, true for every 32-bit value) and     *)
+(* whose rights masking used TLA+ boolean conjunction `/\` on numbers      *)
+(* instead of bitwise AND. Here rights are modelled as SETS of right-bits, *)
+(* so masking is set intersection and "no more rights than the source" is  *)
+(* genuine subset (`\subseteq`) checking that TLC can falsify.             *)
+(*                                                                         *)
+(* Mirrors the kernel: a mint intersects the requested rights with the     *)
+(* source's (rust/src/capability.rs `mint`), a transfer copies rights      *)
+(* verbatim, and a revoke bumps the object's lineage generation so every   *)
+(* derived capability of that object is invalidated at once (the K1/K2     *)
+(* structural sweep + generation bump). `Ceiling[o]` is the authority of   *)
+(* object o's primordial capability -- the most any holder may ever wield. *)
+(***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS MAX_LINEAGES, CNODE_SIZE, MAX_TASKS, KERNEL_RESERVED
+CONSTANTS
+    Tasks,      \* set of task ids, e.g. {1, 2}
+    Slots,      \* set of cnode slot ids, e.g. {1, 2, 3, 4}
+    Objects,    \* set of kernel object ids, e.g. {1, 2}
+    Rights,     \* the universe of right-bits, e.g. {"READ", "WRITE", "GRANT"}
+    Ceiling,    \* [Objects -> SUBSET Rights]: primordial authority per object
+    MaxGen      \* generation bound so the state space stays finite
 
-VARIABLES lineages, cspaces, next_lineage, next_serial
+ASSUME Ceiling \in [Objects -> SUBSET Rights]
+ASSUME Objects \subseteq Slots     \* lets task 1 hold one primordial per object
 
-Cap == [type: Nat, rights: Nat, object: Nat, badge: Nat, serial: Nat, generation: Nat]
+(* Concrete ceilings for the model. TLC's .cfg parser cannot take a computed  *)
+(* function literal for a constant, so the .cfg overrides the Ceiling         *)
+(* constant with this operator (`Ceiling <- CeilingImpl`). Object 1's         *)
+(* primordial holds every right; object 2's lacks GRANT -- so if any          *)
+(* derivation of object 2 ever gained GRANT, NoEscalation would fail.         *)
+CeilingImpl ==
+    [o \in Objects |-> IF o = 1 THEN {"READ", "WRITE", "GRANT"}
+                                 ELSE {"READ", "WRITE"}]
 
+VARIABLES
+    caps,       \* [Tasks -> [Slots -> Cap]]: the cspaces
+    objgen      \* [Objects -> Nat]: current live generation of each object
+
+vars == <<caps, objgen>>
+
+EmptyCap == [obj |-> 0, rights |-> {}, gen |-> 0]
+
+Cap == [obj: Objects \cup {0}, rights: SUBSET Rights, gen: 0..MaxGen]
+
+IsLive(c) == c.obj # 0
+
+TypeOK ==
+    /\ caps \in [Tasks -> [Slots -> Cap]]
+    /\ objgen \in [Objects -> 1..MaxGen]
+
+(* Task 1 is seeded with one primordial capability per object (in the slot  *)
+(* whose number equals the object id), each at that object's full ceiling   *)
+(* and at generation 1. Every other slot starts empty.                      *)
 Init ==
-    /\ lineages = [i \in 1..MAX_LINEAGES |-> [object_id |-> 0, generation |-> 0, refcount |-> 0, valid |-> FALSE]]
-    /\ cspaces = [t \in 1..MAX_TASKS |-> [s \in 1..CNODE_SIZE |-> [type |-> 0, rights |-> 0, object |-> 0, badge |-> 0, serial |-> 0, generation |-> 0]]]
-    /\ next_lineage = 1
-    /\ next_serial = 0x10000
+    /\ objgen = [o \in Objects |-> 1]
+    /\ caps = [t \in Tasks |-> [s \in Slots |->
+                 IF t = 1 /\ s \in Objects
+                 THEN [obj |-> s, rights |-> Ceiling[s], gen |-> 1]
+                 ELSE EmptyCap ]]
 
-FreshSerial ==
-    LET s == IF next_serial < 0x10000 THEN 0x10000 ELSE next_serial + 1 IN
-    IF s = 0 THEN 0x10000 ELSE s
+(* A capability is usable iff it is live and its generation matches the      *)
+(* object's current lineage generation (a revoke bumps the generation, so a  *)
+(* stale derived copy fails here -- the kernel's generation check).          *)
+Valid(t, s) ==
+    LET c == caps[t][s] IN
+        /\ IsLive(c)
+        /\ c.gen = objgen[c.obj]
 
-RegisterLineage(obj) ==
-    /\ next_lineage <= MAX_LINEAGES
-    /\ lineages' = [lineages EXCEPT ![next_lineage] = [object_id |-> obj, generation |-> 1, refcount |-> 1, valid |-> TRUE]]
-    /\ next_lineage' = next_lineage + 1
-    /\ UNCHANGED <<cspaces, next_serial>>
+(* Mint: derive a new capability at (dt, ds) from a usable source (st, ss),  *)
+(* granting the requested rights INTERSECTED with the source's rights. The   *)
+(* intersection is the whole point: a derived capability can never hold a    *)
+(* right the source lacked. `req` ranges over every rights subset in Next.   *)
+Mint(st, ss, dt, ds, req) ==
+    /\ Valid(st, ss)
+    /\ ~IsLive(caps[dt][ds])
+    /\ LET src == caps[st][ss]
+           eff == req \cap src.rights        \* masking = set intersection
+       IN caps' = [caps EXCEPT ![dt][ds] =
+                     [obj |-> src.obj, rights |-> eff, gen |-> src.gen]]
+    /\ UNCHANGED objgen
 
-BumpGen(obj) ==
-    \E i \in 1..MAX_LINEAGES :
-        /\ lineages[i].valid
-        /\ (lineages[i].object_id = obj \/ lineages[i].object_id = 0)
-        /\ lineages' = [lineages EXCEPT ![i].generation = lineages[i].generation + 1, ![i].refcount = 0]
-        /\ UNCHANGED <<cspaces, next_lineage, next_serial>>
+(* Transfer is a full-rights mint: the copy carries exactly the source's     *)
+(* rights (req = Rights, so eff = Rights \cap src.rights = src.rights).       *)
+Transfer(st, ss, dt, ds) == Mint(st, ss, dt, ds, Rights)
 
-Mint(src_task, src_slot, dst_task, dst_slot, new_rights) ==
-    /\ src_slot < CNODE_SIZE /\ dst_slot < CNODE_SIZE /\ dst_slot >= KERNEL_RESERVED
-    /\ LET src == cspaces[src_task][src_slot]
-           dst == cspaces[dst_task][dst_slot]
-           eff == new_rights /\ src.rights
-           fs == FreshSerial
-           g == src.generation
-       IN
-       /\ src.type # 0 /\ src.serial # 0
-       /\ dst.type = 0
-       /\ cspaces' = [cspaces EXCEPT ![dst_task][dst_slot] =
-            [type |-> src.type, rights |-> eff, object |-> src.object,
-             badge |-> src.serial, serial |-> fs, generation |-> g ]]
-       /\ next_serial' = fs
-       /\ UNCHANGED <<lineages, next_lineage>>
-
-Revoke(task, slot) ==
-    /\ slot < CNODE_SIZE
-    /\ LET tgt == cspaces[task][slot]
-           ts == tgt.serial
-           tb == tgt.badge
-           to == tgt.object
-       IN
-       /\ tgt.type # 0
-       /\ cspaces' = [cspaces EXCEPT ![task][slot] =
-            [type |-> 0, rights |-> 0, object |-> 0, badge |-> 0, serial |-> 0, generation |-> 0 ],
-                      ![t \in 1..MAX_TASKS |-> [s \in 1..CNODE_SIZE |-> IF
-                         (cspaces[t][s].serial = ts \/ cspaces[t][s].badge = ts \/
-                          cspaces[t][s].serial = tb \/ cspaces[t][s].badge = tb \/
-                          (to # 0 /\ cspaces[t][s].object = to))
-                         THEN [type |-> 0, rights |-> 0, object |-> 0, badge |-> 0, serial |-> 0, generation |-> 0]
-                         ELSE cspaces[t][s] ]]]
-       /\ BumpGen(to)
-       /\ UNCHANGED <<next_lineage, next_serial>>
-
-Transfer(src_task, src_slot, dst_task, dst_slot) ==
-    Mint(src_task, src_slot, dst_task, dst_slot, 0xFFFFFFFF)
-
-ValidateLookup(task, slot, req_rights) ==
-    LET c == cspaces[task][slot]
-        idx == IF c.object < MAX_LINEAGES THEN c.object ELSE 1
-        lin_gen == IF lineages[idx].valid THEN lineages[idx].generation ELSE c.generation
-    IN c.type # 0 /\ c.serial # 0 /\ (c.rights /\ req_rights) = req_rights /\ c.generation = lin_gen
-
-NoEscalation ==
-    \A t \in 1..MAX_TASKS, s \in 1..CNODE_SIZE :
-        LET c == cspaces[t][s] IN c.type # 0 => c.rights <= 0xFFFFFFFF
-
-Inv ==
-    /\ \A t \in 1..MAX_TASKS, s \in 1..CNODE_SIZE : cspaces[t][s].type # 0 => ValidateLookup(t, s, 0)
-    /\ \A t \in 1..MAX_TASKS, s \in 1..CNODE_SIZE : cspaces[t][s].serial = 0 => cspaces[t][s].type = 0
-    /\ NoEscalation
+(* Revoke object o: bump its generation and structurally clear every         *)
+(* capability of o in every cspace. The generation bump alone would already  *)
+(* invalidate them via Valid(); the sweep models the kernel's precise        *)
+(* subtree clear. Crucially, capabilities of OTHER objects are untouched     *)
+(* -- object-scoped revocation (the K2 exact-lineage property).              *)
+Revoke(o) ==
+    /\ objgen[o] < MaxGen
+    /\ objgen' = [objgen EXCEPT ![o] = @ + 1]
+    /\ caps' = [t \in Tasks |-> [s \in Slots |->
+                 IF caps[t][s].obj = o THEN EmptyCap ELSE caps[t][s] ]]
 
 Next ==
-    \/ \E o \in 1..100 : RegisterLineage(o)
-    \/ \E lid \in 1..MAX_LINEAGES : BumpGen(0)
-    \/ \E st,ss,dt,ds,r \in 0..255 : Mint(st, ss, dt, ds, r)
-    \/ \E t,s \in 0..255 : Revoke(t, s)
-    \/ \E st,ss,dt,ds \in 0..255 : Transfer(st, ss, dt, ds)
+    \/ \E st \in Tasks, ss \in Slots, dt \in Tasks, ds \in Slots, req \in SUBSET Rights :
+         Mint(st, ss, dt, ds, req)
+    \/ \E st \in Tasks, ss \in Slots, dt \in Tasks, ds \in Slots :
+         Transfer(st, ss, dt, ds)
+    \/ \E o \in Objects : Revoke(o)
 
-Spec == Init /\ [][Next]_<<lineages, cspaces, next_lineage, next_serial>>
+Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
+
+(*-------------------------------- INVARIANTS ----------------------------*)
+
+(* REAL subset-rights / non-escalation invariant. Every live capability     *)
+(* holds no more authority than its object's primordial ceiling. Because a   *)
+(* mint only ever intersects rights, and a transfer copies them, rights can  *)
+(* only shrink along any derivation chain -- so this must hold in every      *)
+(* reachable state. Falsifiable: change `req \cap src.rights` to             *)
+(* `req \cup src.rights` in Mint and TLC finds a counterexample immediately. *)
+NoEscalation ==
+    \A t \in Tasks, s \in Slots :
+        IsLive(caps[t][s]) => caps[t][s].rights \subseteq Ceiling[caps[t][s].obj]
+
+(* No capability carries a generation from the future: a derived copy takes  *)
+(* the source generation, which is <= the object's live generation. Catches  *)
+(* a revoke/mint that mismodels the lineage counter.                         *)
+GenSane ==
+    \A t \in Tasks, s \in Slots :
+        IsLive(caps[t][s]) => caps[t][s].gen <= objgen[caps[t][s].obj]
+
+(* Empty slots carry no rights (no authority leaks into a cleared slot).     *)
+EmptyIsInert ==
+    \A t \in Tasks, s \in Slots :
+        ~IsLive(caps[t][s]) => caps[t][s].rights = {}
+
+Inv == TypeOK /\ NoEscalation /\ GenSane /\ EmptyIsInert
 
 =============================================================================

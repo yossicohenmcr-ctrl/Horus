@@ -111,3 +111,11 @@ userspace/*_image.h
 aider/
 # extra reproducible-build hash sidecars
 .build*.sha
+
+# TLA+ model-checking: the pinned tla2tools.jar is downloaded (SHA-verified)
+# by `make verify-tla`, never committed; TLC scratch output stays local too.
+tla2tools.jar
+docs/states/
+docs/*.old
+docs/MC_*
+docs/*_TTrace_*.tla

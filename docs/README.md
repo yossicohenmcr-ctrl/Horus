@@ -14,8 +14,8 @@ Formal specifications:
 
 | File | Contents |
 |---|---|
-| [cap_algebra.tla](cap_algebra.tla) | TLA+ specification of the capability algebra (mint, transfer, revoke) |
-| [paging_isolation.tla](paging_isolation.tla) | TLA+ specification of paging isolation properties |
+| [cap_algebra.tla](cap_algebra.tla) | TLA+ spec of the capability algebra (mint/transfer/revoke); TLC-checked in CI against a real subset-rights non-escalation invariant (model in `cap_algebra.cfg`, run via `make verify-tla`) |
+| [paging_isolation.tla](paging_isolation.tla) | TLA+ spec of per-task address-space isolation; TLC-checked in CI that no user frame is mapped into two tasks and no user mapping reaches kernel memory (model in `paging_isolation.cfg`) |
 
 Templates:
 
@@ -30,6 +30,6 @@ Project-level documents (at the repository root):
 |---|---|
 | [README.md](../README.md) | Build quick start, status-at-a-glance table, project overview |
 | [SECURITY.md](../SECURITY.md) | Security policy, current posture, hardening in place, reporting |
-| [TESTS.md](../TESTS.md) | Test coverage today (63 Rust unit tests, 20 CI jobs) and what is still needed — the source of truth for both counts |
+| [TESTS.md](../TESTS.md) | Test coverage today (63 Rust unit tests, 21 CI jobs) and what is still needed — the source of truth for both counts |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up and submit work |
 | [CHANGES.md](../CHANGES.md) | Changelog (`main` branch state) |

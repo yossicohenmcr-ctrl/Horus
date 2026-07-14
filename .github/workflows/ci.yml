@@ -435,3 +435,22 @@ jobs:
           name: horus-sbom-cyclonedx
           path: sbom.cyclonedx.json
           if-no-files-found: warn
+
+  tla:
+    name: TLA+ model checking (cap algebra + paging isolation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      # A JRE from the distro repos (same apt discipline as cppcheck/flawfinder);
+      # tla2tools.jar is fetched and SHA-256-verified by the Makefile target.
+      - name: Install JRE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-jre-headless
+
+      # BLOCKING gate: TLC exhaustively checks both specs' safety invariants and
+      # exits non-zero (12) on any violation. The specs are real and falsifiable
+      # (subset-rights non-escalation; per-task frame isolation), not decorative.
+      - name: Model-check TLA+ specs
+        run: make verify-tla
