@@ -9,7 +9,7 @@ honest about which is implemented.
 | Anchor | Question it answers | Status |
 |---|---|---|
 | **Build provenance** | "Did this `kernel.elf` come from this repo's CI, built from a reviewed commit?" | **Implemented** (`.github/workflows/release.yml`) |
-| **Runtime verified boot** | "Will the machine refuse to run an image it cannot verify?" | **Designed, not yet enforced** (this doc, Phase A–C) |
+| **Runtime verified boot** | "Will the machine refuse to run an image it cannot verify?" | **Phase B verifier implemented & CI-gated** (Ed25519 verify-or-halt, `src/kernel/verified_boot.c`); production image-anchoring pending (Phase A–C below) |
 
 ---
 
@@ -50,13 +50,33 @@ entirely, because nothing on the boot path checks it. That is Phase A–C.
 
 ---
 
-## 2. Runtime verified boot (design; not yet implemented)
+## 2. Runtime verified boot (Phase B verifier implemented; anchoring in progress)
 
 **Design principle — the verifier must be strictly more trusted than the
 verified.** A kernel cannot meaningfully verify itself: if it is tampered, so is
 its own check. Verification must live *below* the kernel (firmware / bootloader
 / a minimal first stage) and root in something the attacker cannot silently
 replace (Secure Boot keys, or a key in write-protected/known-good storage).
+
+### What is implemented now
+
+The Ed25519 **verify-or-halt mechanism** exists and is gated in CI. On boot the
+kernel verifies a signed manifest against a public key **embedded in the boot
+path** (the trust anchor) and, on any signature failure, prints its marker and
+**halts** — a tampered payload cannot proceed (`src/kernel/verified_boot.c`,
+compiled under `VBOOT_SELFTEST`). The verifier is from-scratch **safe Rust**
+(`rust/src/ed25519.rs` over `rust/src/sha512.rs`), consistent with the crate's
+zero-dependency policy, and is validated against the **RFC 8032** known-answer
+vectors *and* an **OpenSSL-generated** signature (cross-implementation). The
+`smoke-vboot` CI job exercises both paths in QEMU: a valid manifest authorizes
+boot, and a one-byte-tampered manifest is rejected and halts.
+
+What remains for a full runtime guarantee is **anchoring the verifier to the
+actual shipped image** under a root the attacker cannot rewrite — Phases A–C.
+Today, with the payload embedded alongside the key, this is boot-time integrity /
+defence-in-depth: it defeats a party who can tamper but not re-sign (bit-rot,
+disk corruption, an image swap without the offline key), not one who can rewrite
+the anchor itself.
 
 ### Phase A — UEFI Secure Boot chain (recommended; hardware root of trust)
 
@@ -82,14 +102,18 @@ that runs before the kernel proper:
 1. `release.yml` signs `kernel.elf` with an **ed25519** key held offline / in a
    hardware token (never on a CI runner), producing a detached signature shipped
    as a Multiboot module.
-2. A small first stage (or an extended `entry64.S` pre-`kmain` stub) computes
-   SHA-256 over the loaded kernel image and verifies the ed25519 signature
-   against a **public key compiled into the first stage** before jumping to
-   `kmain`. On mismatch it halts (and, once storage is up, records to the
-   tamper-evident audit chain).
-3. Horus already has SHA-256 in the safe-Rust core (`rust/src/sha256.rs`);
-   ed25519 verification would be added there (a from-scratch, test-vector-gated
-   `verify`, consistent with the crate's zero-dependency policy).
+2. A small first stage (or an extended `entry64.S` pre-`kmain` stub) verifies
+   the ed25519 signature over the loaded kernel image against a **public key
+   compiled into the first stage** before jumping to `kmain`. On mismatch it
+   halts (and, once storage is up, records to the tamper-evident audit chain).
+   The verify-or-halt call itself is already built and CI-gated
+   (`src/kernel/verified_boot.c` → `rust_ed25519_verify`); what remains is
+   feeding it the *actual loaded image bytes* and the offline-produced detached
+   signature instead of the embedded self-test manifest.
+3. **Done:** ed25519 verification (with its internal SHA-512) now lives in the
+   safe-Rust core (`rust/src/ed25519.rs`, `rust/src/sha512.rs`) — a from-scratch,
+   test-vector-gated `verify`, consistent with the crate's zero-dependency
+   policy.
 
 - **Root of trust:** the embedded public key in the first stage — only as strong
   as the first stage's own integrity (write-protected boot medium, or Phase A
@@ -110,5 +134,8 @@ that runs before the kernel proper:
 Phase B is the smallest self-contained increment for the current BIOS target and
 reuses the existing crypto core; Phase A is the strongest anchor once a UEFI
 target exists; Phase C composes with either and ties back into the audit-log
-threat model. None is implemented yet — this document is the design of record so
-the work is scoped rather than improvised.
+threat model. The Phase B **verifier** (Ed25519 verify-or-halt) is now built and
+CI-gated; the remaining work is anchoring it to the shipped image (offline
+signing in `release.yml` + a pre-`kmain` stage that verifies the real loaded
+bytes) and, above that, Phase A/C. This document remains the design of record for
+that anchoring so the work is scoped rather than improvised.

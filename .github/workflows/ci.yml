@@ -217,6 +217,23 @@ jobs:
       - name: Boot NOTIFY_SELFTEST kernel and assert SYS_NOTIFY delivers a badge to a blocked SYS_WAIT_NOTIFY
         run: make smoke-notify
 
+  smoke-vboot:
+    name: QEMU Ed25519 verified-boot self-test (accept + reject, headless)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - name: Install build toolchain + QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils make \
+            xorriso grub-pc-bin grub-common mtools \
+            qemu-system-x86
+      - name: Add bare-metal Rust target
+        run: rustup target add x86_64-unknown-none
+      - name: Boot VBOOT_SELFTEST kernel and assert the Ed25519 gate authorizes a valid manifest and halts on a tampered one
+        run: make smoke-vboot
+
   smoke-session:
     name: Scripted integration session (headless, drives the real shell)
     runs-on: ubuntu-24.04
