@@ -53,6 +53,14 @@ jobs:
       contents: write      # create the GitHub Release + upload assets
       id-token: write       # OIDC identity for keyless Sigstore signing
       attestations: write   # write the build-provenance attestation
+    # The `secrets` context is NOT permitted inside `if:` expressions — a workflow
+    # that references it there fails at STARTUP (0 jobs, no logs) on every trigger,
+    # which would silently produce no release on a version tag. Bind the optional
+    # offline signing key to a job-level env var here (secrets ARE allowed in
+    # `env`), and gate the optional enforcing-image / manifest-signing steps on
+    # `env.VBOOT_ED25519_PRIVATE_KEY` instead.
+    env:
+      VBOOT_ED25519_PRIVATE_KEY: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
@@ -84,7 +92,7 @@ jobs:
       # key never leaves the ephemeral runner and is never committed. This is the
       # same mechanism the `smoke-vboot-image` CI job proves accept+reject on.
       - name: Build + sign the enforcing verified-boot image (optional)
-        if: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY != '' }}
+        if: ${{ env.VBOOT_ED25519_PRIVATE_KEY != '' }}
         env:
           VBOOT_KEY: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY }}
         run: |
@@ -127,7 +135,7 @@ jobs:
       # published public key. The private key is never written to disk beyond the
       # ephemeral runner and never committed.
       - name: Sign the release manifest (optional, Ed25519)
-        if: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY != '' }}
+        if: ${{ env.VBOOT_ED25519_PRIVATE_KEY != '' }}
         env:
           VBOOT_KEY: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY }}
         run: |
