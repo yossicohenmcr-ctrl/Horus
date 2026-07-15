@@ -246,6 +246,24 @@ int caller_holds_irq_cap(int irq) {
     return held;
 }
 
+/* True iff the current task holds any CAP_BLOCK_DEV capability. The least-privilege
+ * gate for SYS_BLKDEV_REGISTER / SYS_BLKDEV_COMPLETE (the ring-3 disk_server holds
+ * this in whatever cspace slot init delegated it to, so we scan rather than fix a
+ * slot). Fail-closed. */
+int caller_holds_blkdev_cap(void) {
+    int pid = get_current_task();
+    if (pid < 0 || pid >= MAX_TASKS) return 0;
+    tcb_t *t = &tasks[pid];
+    if (!t->cspace) return 0;
+    int held = 0;
+    spin_lock(&cap_lock);
+    for (uint32_t s = 0; s < t->cspace_size; s++) {
+        if (t->cspace[s].type == CAP_BLOCK_DEV) { held = 1; break; }
+    }
+    spin_unlock(&cap_lock);
+    return held;
+}
+
 /*
  * Resolve a capability slot for the current task, fail-closed.
  *

@@ -218,6 +218,8 @@ void users_init(void);
 #define SYS_IPC_REPLY_TO       75   /* (req_ep, msg, len) -> 0; reply to the task that sent the last request on req_ep (routed by kernel-recorded sender, not a shared reply endpoint) — multi-client safe */
 #define SYS_IRQ_REGISTER       76   /* (irq, notif_slot) -> 0; ring-3 driver binds a hardware IRQ to a notification slot (CAP_IRQ naming the line) */
 #define SYS_IRQ_ACK            77   /* (irq) -> 0; ring-3 driver re-unmasks the line after servicing the device (CAP_IRQ naming the line) */
+#define SYS_BLKDEV_REGISTER    78   /* (bounce_vaddr, notif_slot, total_blocks) -> 0; ring-3 disk_server registers as the block backend (CAP_BLOCK_DEV) */
+#define SYS_BLKDEV_COMPLETE    79   /* (result) -> 0; ring-3 disk_server signals the notified block request is done (CAP_BLOCK_DEV) */
 
 /* Minimum size of a registered alternate signal stack (SYS_SIGALTSTACK); smaller
  * requests fail closed so a handler always has room for at least a shallow frame. */
@@ -795,6 +797,9 @@ void cap_cache_io_ports(int pid);
 /* True iff the current task holds a CAP_IRQ capability naming exactly `irq`.
  * The least-privilege gate for the SYS_IRQ_REGISTER / SYS_IRQ_ACK bridge. */
 int caller_holds_irq_cap(int irq);
+/* True iff the current task holds a CAP_BLOCK_DEV cap — gate for the ring-3
+ * disk_server registration/completion syscalls. */
+int caller_holds_blkdev_cap(void);
 /* IRQ -> notification bridge back ends (src/kernel/idt.c). register binds a line
  * to a driver's notification slot and unmasks it; ack re-unmasks after service. */
 int irq_bridge_register(int irq, uint32_t notif_slot, int task);
@@ -802,6 +807,27 @@ int irq_bridge_ack(int irq);
 /* Deliver a badge to a notification slot, waking any blocked waiter (syscall_ipc.c).
  * Also called from interrupt context by the IRQ bridge. */
 int sys_notify(uint32_t notif_slot, uint32_t badge);
+
+#if defined(STORAGE_RING3_DISK) || defined(STORAGED_SELFTEST)
+/* storaged: the in-kernel storage-service coroutine (src/kernel/storaged.c). Its
+ * stack is crafted by storaged_bootstrap(); storaged_activate() runs it until it
+ * yields (needs disk I/O, or idle); storaged_yield() suspends it back to its
+ * activator with the mid-op kernel stack intact. */
+void storaged_bootstrap(void);
+void storaged_activate(void);
+void storaged_yield(void);
+#endif
+#ifdef STORAGED_SELFTEST
+void storaged_selftest(void);
+#endif
+#ifdef STORAGE_RING3_DISK
+/* The ring-3 disk_server block backend (defined in storaged.c). storage_init points
+ * current_bd at this under the flag; its read_block/write_block run only on storaged
+ * and cooperatively block on disk_server. `blkdev_registered()` reports whether the
+ * driver has announced itself yet (mount is deferred until it has). */
+extern block_device_t g_ring3_bd;
+int  blkdev_registered(void);
+#endif
 capability_t *cap_lookup(uint32_t slot, uint32_t required_rights);
 /* Non-retrying variant of cap_lookup for callers that ALREADY hold cap_lock
  * (kcap_lookup via cap_mint/cap_transfer, task_kill_authorized via

@@ -29,7 +29,7 @@ extern uint8_t embedded_fsserver_bin_end[];
 extern uint8_t embedded_fsclient_bin_start[];
 extern uint8_t embedded_fsclient_bin_end[];
 #endif
-#ifdef INIT_DISK_SELFTEST
+#if defined(INIT_DISK_SELFTEST) || defined(STORAGE_RING3_DISK)
 extern uint8_t embedded_diskserver_bin_start[];
 extern uint8_t embedded_diskserver_bin_end[];
 #endif
@@ -58,9 +58,9 @@ static const struct embedded_binary embedded_binaries[] = {
      * IPC. INIT_FS_SELFTEST only. */
     { "fsclient",  embedded_fsclient_bin_start, embedded_fsclient_bin_end },
 #endif
-#ifdef INIT_DISK_SELFTEST
-    /* disk_server: spawned by name from init to drive the ATA secondary channel
-     * from ring 3 (CAP_IO_PORT + CAP_IRQ). INIT_DISK_SELFTEST only. */
+#if defined(INIT_DISK_SELFTEST) || defined(STORAGE_RING3_DISK)
+    /* disk_server: spawned by name from init — the ring-3 ATA driver (self-test
+     * proof, or the STORAGE_RING3_DISK block-service backend). */
     { "disk_server", embedded_diskserver_bin_start, embedded_diskserver_bin_end },
 #endif
 #ifdef PROC_SELFTEST

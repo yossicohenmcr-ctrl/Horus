@@ -618,6 +618,14 @@ int storage_init(void) {
      * formatted and unlocked immediately with a per-boot throwaway key so the
      * system still comes up without a login. ata_init()'s probe is bounded, so a
      * floating/absent bus can never hang the boot. */
+#ifdef STORAGE_RING3_DISK
+    /* Ring-3 disk_server owns the primary master now: the kernel must NOT probe or
+     * drive ATA here (that would fight the ring-3 driver for the same ports). The
+     * volume is mounted later, once disk_server has registered (blkdev_on_register
+     * enqueues the mount onto storaged). Until then — and on a diskless boot — the
+     * ephemeral RAM vdisk below brings the system up. */
+    (void)atadisk_read; (void)atadisk_write; (void)g_ata_bd;
+#else
     if (ata_init()) {
         current_bd = &g_ata_bd;
         if (storage_mount(&g_ata_bd) != 0) {
@@ -626,6 +634,7 @@ int storage_init(void) {
         }
         return 0;                    /* unlock deferred to login */
     }
+#endif
 
     /* No disk: ephemeral in-RAM virtual disk, formatted and unlocked immediately
      * with a per-boot random password (the vdisk is never persisted, so the
