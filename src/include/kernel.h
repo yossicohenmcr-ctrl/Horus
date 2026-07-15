@@ -716,6 +716,13 @@ int rust_ed25519_verify(const uint8_t *public_key, const uint8_t *sig,
  * marker and halts. See docs/BOOT_INTEGRITY.md. */
 void verified_boot_selftest(void) __attribute__((noreturn));
 #endif
+#ifdef VBOOT_ENFORCE
+/* Real-image verified boot (verified_boot.c): verify the loaded kernel image
+ * against an Ed25519 signature over its own bytes, anchored to an embedded
+ * public key. Returns on success (boot continues); halts on failure. See
+ * docs/BOOT_INTEGRITY.md. */
+void verified_boot_enforce(void);
+#endif
 
 void terminal_init(void);
 void clear_screen(void);

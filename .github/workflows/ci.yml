@@ -218,21 +218,23 @@ jobs:
         run: make smoke-notify
 
   smoke-vboot:
-    name: QEMU Ed25519 verified-boot self-test (accept + reject, headless)
+    name: QEMU Ed25519 verified-boot (manifest self-test + real signed image, headless)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
-      - name: Install build toolchain + QEMU
+      - name: Install build toolchain + QEMU + openssl
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential binutils make \
             xorriso grub-pc-bin grub-common mtools \
-            qemu-system-x86
+            qemu-system-x86 openssl
       - name: Add bare-metal Rust target
         run: rustup target add x86_64-unknown-none
       - name: Boot VBOOT_SELFTEST kernel and assert the Ed25519 gate authorizes a valid manifest and halts on a tampered one
         run: make smoke-vboot
+      - name: Sign the REAL kernel image and assert it boots signed but halts when tampered
+        run: make smoke-vboot-image
 
   smoke-session:
     name: Scripted integration session (headless, drives the real shell)

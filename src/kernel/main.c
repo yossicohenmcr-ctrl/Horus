@@ -71,6 +71,13 @@ void kernel_main(uint32_t mb_info) {
      * and halts (a real reject must not continue). See verified_boot.c. */
     verified_boot_selftest();
 #endif
+#ifdef VBOOT_ENFORCE
+    /* Real-image verified boot: verify the loaded kernel image against its
+     * Ed25519 signature (anchored to the embedded key) before any further init.
+     * Returns only if authorized; halts the machine on a bad/absent signature.
+     * See verified_boot.c and docs/BOOT_INTEGRITY.md. */
+    verified_boot_enforce();
+#endif
 
     idt_init64();
     pic_init();

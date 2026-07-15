@@ -9,7 +9,7 @@ honest about which is implemented.
 | Anchor | Question it answers | Status |
 |---|---|---|
 | **Build provenance** | "Did this `kernel.elf` come from this repo's CI, built from a reviewed commit?" | **Implemented** (`.github/workflows/release.yml`) |
-| **Runtime verified boot** | "Will the machine refuse to run an image it cannot verify?" | **Phase B verifier implemented & CI-gated** (Ed25519 verify-or-halt, `src/kernel/verified_boot.c`); production image-anchoring pending (Phase A–C below) |
+| **Runtime verified boot** | "Will the machine refuse to run an image it cannot verify?" | **Phase B implemented & CI-gated** — the kernel verifies its own loaded image (`.text`+`.rodata`) against an embedded Ed25519 anchor and halts on a mismatch (`src/kernel/verified_boot.c`, `VBOOT_ENFORCE`; accept + tamper-reject proven by `make smoke-vboot-image`). Hardware-rooting the anchor itself is Phase A / C below |
 
 ---
 
@@ -50,33 +50,50 @@ entirely, because nothing on the boot path checks it. That is Phase A–C.
 
 ---
 
-## 2. Runtime verified boot (Phase B verifier implemented; anchoring in progress)
+## 2. Runtime verified boot (Phase B implemented; hardware-rooting is Phase A/C)
 
 **Design principle — the verifier must be strictly more trusted than the
 verified.** A kernel cannot meaningfully verify itself: if it is tampered, so is
-its own check. Verification must live *below* the kernel (firmware / bootloader
-/ a minimal first stage) and root in something the attacker cannot silently
-replace (Secure Boot keys, or a key in write-protected/known-good storage).
+its own check. A hardware-rooted anchor must ultimately live *below* the kernel
+(firmware / bootloader) and root in something the attacker cannot silently
+replace (Secure Boot keys, or a key in write-protected storage).
 
 ### What is implemented now
 
-The Ed25519 **verify-or-halt mechanism** exists and is gated in CI. On boot the
-kernel verifies a signed manifest against a public key **embedded in the boot
-path** (the trust anchor) and, on any signature failure, prints its marker and
-**halts** — a tampered payload cannot proceed (`src/kernel/verified_boot.c`,
-compiled under `VBOOT_SELFTEST`). The verifier is from-scratch **safe Rust**
-(`rust/src/ed25519.rs` over `rust/src/sha512.rs`), consistent with the crate's
-zero-dependency policy, and is validated against the **RFC 8032** known-answer
-vectors *and* an **OpenSSL-generated** signature (cross-implementation). The
-`smoke-vboot` CI job exercises both paths in QEMU: a valid manifest authorizes
-boot, and a one-byte-tampered manifest is rejected and halts.
+Under `VBOOT_ENFORCE` the kernel verifies **its own loaded image** against an
+Ed25519 signature over that image, anchored to a public key **compiled into the
+image** — and **halts** on any mismatch, before any further init. This is real
+verify-or-halt over the actual bytes GRUB loaded, not a placeholder manifest.
 
-What remains for a full runtime guarantee is **anchoring the verifier to the
-actual shipped image** under a root the attacker cannot rewrite — Phases A–C.
-Today, with the payload embedded alongside the key, this is boot-time integrity /
-defence-in-depth: it defeats a party who can tamper but not re-sign (bit-rot,
-disk corruption, an image swap without the offline key), not one who can rewrite
-the anchor itself.
+- **Hashed region:** `[__image_start, __vboot_sig_start)` — the kernel's `.text`
+  (all executable code, including the Multiboot header) and `.rodata` (all
+  read-only constants). `linker64_vboot.ld` packs these into a single contiguous
+  PT_LOAD, so the bytes in memory are byte-for-byte the bytes the signer hashed
+  (GRUB does not zero inter-segment gaps, so a multi-segment layout would hash
+  non-deterministically). `.data` is **excluded** — early boot mutates some
+  writable globals before the verify runs, so its runtime bytes would not match
+  the file (see residual below).
+- **Signature slot:** a 64-byte `.vboot_sig` section *outside* the hashed region
+  (a signature cannot cover itself), patched post-build by `tools/vboot_sign.sh`.
+- **Verifier:** from-scratch **safe Rust** (`rust/src/ed25519.rs` over
+  `rust/src/sha512.rs`), zero-dependency, validated against **RFC 8032** and an
+  **OpenSSL** signature. The signing key is offline; the kernel only ever holds
+  the public anchor and verifies.
+- **Proven in CI:** `make smoke-vboot-image` generates an ephemeral key, builds +
+  signs the real image, and boots it twice in QEMU — the untouched image
+  authorizes boot (`VBOOT_ENFORCE: PASS`), and one flipped byte in the signed
+  region is rejected and halts (`VBOOT_ENFORCE: FAIL`). `release.yml` builds and
+  ships this enforcing image (`kernel.vboot.elf`) when the offline key is set.
+- The older `VBOOT_SELFTEST` path (a fixed embedded manifest) remains as a
+  focused self-test of the verifier primitive; `smoke-vboot` runs both.
+
+**Residuals (honest):** (1) the anchor is compiled into the same image it
+guards, so this defeats a party who can tamper but not re-sign (bit-rot, disk
+corruption, an image swap without the offline key) — **not** one who can also
+rewrite the embedded anchor. Hardware-rooting the anchor is Phase A (UEFI Secure
+Boot) / Phase C (TPM). (2) `.data` (≈14 KB of initialised writable globals) is
+outside the signed region; extending coverage to it requires running the verify
+before any `.data` write (a pre-`kmain` stub) — a natural Phase A/C companion.
 
 ### Phase A — UEFI Secure Boot chain (recommended; hardware root of trust)
 

@@ -11,7 +11,11 @@ CFLAGS = -m64 -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
          -Wall -Wextra -Wformat -Wformat-security -Werror=vla -O2 -pipe \
          -I src/include -I include -std=gnu99 -fno-builtin -mcmodel=kernel -frandom-seed=horus -fdebug-prefix-map=$(CURDIR)=/horus
 ASFLAGS = -m64 -ffreestanding -fno-pic -fno-pie -x assembler-with-cpp -c
-LDFLAGS = -T linker64.ld -m elf_x86_64 -nostdlib -static --build-id=none
+# The link script is swappable so VBOOT_ENFORCE builds can use a single-PT_LOAD
+# layout (linker64_vboot.ld) whose loaded image is contiguous and deterministic
+# to hash; the default/ship kernel keeps the three-segment linker64.ld.
+LINKER_SCRIPT ?= linker64.ld
+LDFLAGS = -T $(LINKER_SCRIPT) -m elf_x86_64 -nostdlib -static --build-id=none
 RUST_TARGET ?= x86_64-unknown-none
 
 
@@ -203,6 +207,21 @@ VBOOT_TAMPER ?= 0
 ifeq ($(VBOOT_TAMPER),1)
 CFLAGS  += -DVBOOT_TAMPER
 endif
+endif
+
+# VBOOT_ENFORCE=1 is the REAL verified boot: the kernel verifies its own loaded
+# image against an Ed25519 signature over its bytes (anchored to an embedded key)
+# and halts if it fails. Unlike VBOOT_SELFTEST (a fixed manifest), this refuses a
+# tampered kernel image. It uses the single-PT_LOAD link script so the loaded
+# image is contiguous/deterministic to hash, and compiles in the trust anchor
+# from a generated header (tools/vboot_genkey.sh writes $(VBOOT_ANCHOR_DIR)/
+# vboot_anchor.h; sign the built image with tools/vboot_sign.sh). See
+# docs/BOOT_INTEGRITY.md and the `smoke-vboot-image` target.
+VBOOT_ANCHOR_DIR ?= build
+VBOOT_ENFORCE ?= 0
+ifeq ($(VBOOT_ENFORCE),1)
+CFLAGS       += -DVBOOT_ENFORCE -I$(VBOOT_ANCHOR_DIR)
+LINKER_SCRIPT := linker64_vboot.ld
 endif
 
 # PROC_SELFTEST=1 embeds the proctest driver and, at boot, drives SYS_EXIT +
@@ -693,6 +712,32 @@ smoke-vboot:
 	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
 		REQUIRE_MARKER='VBOOT_SELFTEST: PASS tampered manifest rejected' \
 		FAIL_MARKER='VBOOT_SELFTEST: FAIL' tools/smoke_test.sh boot.iso
+
+# REAL-IMAGE verified boot (audit 3.3, Phase B anchoring). Unlike smoke-vboot
+# (a fixed embedded manifest), this signs the ACTUAL kernel image and proves the
+# machine refuses a tampered one. An ephemeral Ed25519 key is generated (never
+# committed), its public half compiled in as the trust anchor, the built image
+# signed over its own bytes, and two headless boots run:
+#  (1) ACCEPT: the untouched signed image verifies -> boot authorized (continues).
+#  (2) REJECT: one flipped byte in the signed region -> verification fails -> halt.
+.PHONY: smoke-vboot-image
+smoke-vboot-image:
+	@echo "== verified-boot (real image) ACCEPT: signed kernel -> boot authorized =="
+	@$(MAKE) --no-print-directory clean
+	@mkdir -p $(VBOOT_ANCHOR_DIR)
+	@bash tools/vboot_genkey.sh $(VBOOT_ANCHOR_DIR)/vboot_priv.pem $(VBOOT_ANCHOR_DIR)/vboot_anchor.h
+	@$(MAKE) --no-print-directory VBOOT_ENFORCE=1 kernel.elf
+	@bash tools/vboot_sign.sh kernel.elf $(VBOOT_ANCHOR_DIR)/vboot_priv.pem
+	@$(MAKE) --no-print-directory VBOOT_ENFORCE=1 boot.iso
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
+		REQUIRE_MARKER='VBOOT_ENFORCE: PASS kernel image signature verified' \
+		FAIL_MARKER='VBOOT_ENFORCE: FAIL' tools/smoke_test.sh boot.iso
+	@echo "== verified-boot (real image) REJECT: tampered kernel -> halt =="
+	@bash tools/vboot_tamper.sh kernel.elf
+	@$(MAKE) --no-print-directory VBOOT_ENFORCE=1 boot.iso
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
+		REQUIRE_MARKER='VBOOT_ENFORCE: FAIL kernel image signature invalid' \
+		FAIL_MARKER='VBOOT_ENFORCE: PASS' tools/smoke_test.sh boot.iso
 
 # Scripted integration session: build the shipped kernel and drive the *real*
 # ring-3 shell over serial (login, identity, and a capability-gated admin op

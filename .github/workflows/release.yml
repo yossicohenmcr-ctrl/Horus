@@ -20,18 +20,21 @@ name: Release
 # published binary carries provenance from this repo's pipeline.
 #
 # The runtime half — verified boot (the machine refusing to run an unverified
-# image at load) — now has a working Ed25519 verify-or-halt mechanism in the
-# kernel (src/kernel/verified_boot.c, CI-gated by the smoke-vboot job). This
-# workflow optionally produces a DETACHED Ed25519 signature over the release
-# manifest so a future first stage (or an out-of-band verifier) can check the
-# shipped image against a trust-anchored public key. See docs/BOOT_INTEGRITY.md.
+# image at load) — is implemented: the kernel verifies its own loaded image
+# (.text + .rodata) against an Ed25519 signature anchored to an embedded key and
+# halts on a mismatch (src/kernel/verified_boot.c; accept + tamper-reject proven
+# by the smoke-vboot job). When the offline key is configured, this workflow
+# builds that ENFORCING image, signs it over its own bytes, and publishes it as
+# kernel.vboot.elf / boot.vboot.iso; it also optionally emits a detached Ed25519
+# signature over the release manifest. See docs/BOOT_INTEGRITY.md.
 #
 # KEY CUSTODY (important): the strict model signs with an OFFLINE key held in a
-# hardware token, never on a CI runner. The signing step below is therefore
-# OPTIONAL and only runs when a maintainer sets the VBOOT_ED25519_PRIVATE_KEY
-# secret; a CI-held key is a lower-assurance convenience channel, not the
-# hardware-rooted anchor. Without the secret the release is still provenance-
-# attested (keyless Sigstore), just without a detached image signature.
+# hardware token, never on a CI runner. The enforcing-image and manifest-signing
+# steps below are therefore OPTIONAL and only run when a maintainer sets the
+# VBOOT_ED25519_PRIVATE_KEY secret; a CI-held key is a lower-assurance
+# convenience channel, not the hardware-rooted anchor. Without the secret the
+# release is still reproducible and provenance-attested (keyless Sigstore), just
+# without the self-verifying image.
 
 on:
   push:
@@ -72,9 +75,43 @@ jobs:
       - name: Build bootable ISO
         run: make boot.iso
 
+      # OPTIONAL real verified-boot image. When the offline signing key is
+      # configured, additionally build the ENFORCING kernel — which verifies its
+      # own image bytes against the embedded anchor at boot and halts on a
+      # mismatch — sign it over its own image, and publish it as kernel.vboot.elf
+      # / boot.vboot.iso alongside the default artifacts. The default kernel.elf /
+      # boot.iso (reproducible + provenance-attested) are preserved unchanged. The
+      # key never leaves the ephemeral runner and is never committed. This is the
+      # same mechanism the `smoke-vboot-image` CI job proves accept+reject on.
+      - name: Build + sign the enforcing verified-boot image (optional)
+        if: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY != '' }}
+        env:
+          VBOOT_KEY: ${{ secrets.VBOOT_ED25519_PRIVATE_KEY }}
+        run: |
+          umask 077
+          # Preserve the default (reproducible, attested) artifacts.
+          cp kernel.elf kernel.default.elf
+          cp boot.iso boot.default.iso
+          mkdir -p build
+          printf '%s' "$VBOOT_KEY" > build/vboot_priv.pem
+          # Compile in the public half of the offline key as the trust anchor,
+          # then build the enforcing kernel and sign it over its own image bytes.
+          bash tools/vboot_anchor_header.sh build/vboot_priv.pem build/vboot_anchor.h
+          make clean
+          make VBOOT_ENFORCE=1 kernel.elf
+          bash tools/vboot_sign.sh kernel.elf build/vboot_priv.pem
+          cp kernel.elf kernel.vboot.elf
+          make VBOOT_ENFORCE=1 boot.iso
+          cp boot.iso boot.vboot.iso
+          rm -f build/vboot_priv.pem
+          # Restore the default artifacts for the manifest / attestation below.
+          mv kernel.default.elf kernel.elf
+          mv boot.default.iso boot.iso
+          echo "Built + signed enforcing verified-boot image (kernel.vboot.elf / boot.vboot.iso)."
+
       - name: Compute SHA-256 manifest + build info
         run: |
-          sha256sum kernel.elf boot.iso | tee SHA256SUMS
+          sha256sum kernel.elf boot.iso $(ls kernel.vboot.elf boot.vboot.iso 2>/dev/null) | tee SHA256SUMS
           {
             echo "repository: ${GITHUB_REPOSITORY}"
             echo "ref:        ${GITHUB_REF_NAME}"
@@ -131,6 +168,7 @@ jobs:
           ASSETS="kernel.elf boot.iso SHA256SUMS BUILDINFO.txt"
           [ -f sbom.cyclonedx.json ] && ASSETS="$ASSETS sbom.cyclonedx.json"
           [ -f SHA256SUMS.sig ] && ASSETS="$ASSETS SHA256SUMS.sig vboot_pubkey.pem"
+          [ -f kernel.vboot.elf ] && ASSETS="$ASSETS kernel.vboot.elf boot.vboot.iso"
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Horus ${GITHUB_REF_NAME}" \
@@ -146,7 +184,9 @@ jobs:
           sha256sum -c SHA256SUMS
           \`\`\`
           \`kernel.elf\` is byte-for-byte reproducible from the tagged source (see docs/BUILDING.md).
-          The kernel's Ed25519 verify-or-halt boot gate is implemented and CI-gated (\`smoke-vboot\`); when a
-          detached \`SHA256SUMS.sig\` + \`vboot_pubkey.pem\` are attached, the manifest is Ed25519-signed.
-          Full image-anchoring (offline key + pre-kmain verify) is scoped in docs/BOOT_INTEGRITY.md." \
+          When present, \`kernel.vboot.elf\` / \`boot.vboot.iso\` are the ENFORCING verified-boot image: the
+          kernel verifies its own \`.text\`+\`.rodata\` against an embedded Ed25519 anchor at boot and halts on a
+          mismatch (accept + tamper-reject are both proven by the \`smoke-vboot\` CI job). A detached
+          \`SHA256SUMS.sig\` + \`vboot_pubkey.pem\`, when attached, additionally sign the manifest. See
+          docs/BOOT_INTEGRITY.md." \
             $ASSETS
