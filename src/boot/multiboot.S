@@ -127,10 +127,16 @@ setup_tss64:
     lea stack_top(%rip), %rax
     movq %rax, tss64 + 4
 
-    /* Encode the 16-byte TSS descriptor at gdt64 offset 56 (selector 0x38). */
+    /* Point the I/O-map base at offset 104 (the bitmap defined after the TSS
+     * core) so the CPU enforces per-port ring-3 I/O permission. */
+    movw $104, tss64 + 102
+
+    /* Encode the 16-byte TSS descriptor at gdt64 offset 56 (selector 0x38). The
+     * limit now spans the 8192-byte I/O bitmap + terminator (tss64_end - tss64 -
+     * 1 = 8296 = 0x2068), not just the 104-byte core. */
     lea gdt64_start(%rip), %rdi
     lea tss64(%rip), %rax
-    movw $103, 56(%rdi)        /* limit[15:0] = sizeof(TSS)-1 */
+    movw $0x2068, 56(%rdi)     /* limit[15:0] = sizeof(TSS incl. iomap)-1 */
     movw %ax, 58(%rdi)         /* base[15:0] */
     movb $0x89, 61(%rdi)       /* access: present, type=9 (avail 64-bit TSS) */
     movb $0x00, 62(%rdi)       /* limit[19:16]=0, flags=0 */
@@ -259,13 +265,24 @@ gdt64_ptr32:
 .global tss64
 .align 16
 tss64:
-    .long 0, 0
-    .quad 0
-    .quad 0, 0, 0
-    .quad 0, 0, 0, 0, 0, 0, 0
-    .quad 0
-    .word 0
-    .word 0
+    .long 0, 0                      /* 0..7:  reserved + RSP0[31:0] */
+    .quad 0                         /* 8..15: RSP0[63:32], RSP1[31:0] */
+    .quad 0, 0, 0                   /* 16..39 */
+    .quad 0, 0, 0, 0, 0, 0, 0       /* 40..95 */
+    .quad 0                         /* 96..103: includes the iomap_base word at
+                                       offset 102, set to 104 at runtime by
+                                       setup_tss64 so the CPU consults the bitmap
+                                       below for ring-3 I/O-port access. */
+/* Per-task I/O permission bitmap (offset 104): one bit per x86 I/O port, set = the
+ * port is DENIED to ring 3. Default all-deny (0xFF); set_tss_kernel_stack / the
+ * driver framework clear bits for a task's granted CAP_IO_PORT windows. The final
+ * 0xFF byte is the Intel-recommended terminator. Extends the TSS to 8297 bytes;
+ * the descriptor limit in setup_tss64 is widened to match. */
+.global tss64_iomap
+tss64_iomap:
+    .fill 8192, 1, 0xFF
+    .byte 0xFF
+tss64_end:
 
 .align 16
 ist1_stack_bottom:

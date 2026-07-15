@@ -138,6 +138,12 @@ create_user_pagedir(id);
                                                * derivation parent (I2). */
     }
 
+    /* Reset the I/O-port cache: a reused slot must not inherit a dead driver's
+     * granted ports. With no CAP_IO_PORT caps, this task runs all-ports-denied
+     * until one is explicitly granted (which calls cap_cache_io_ports). */
+    tasks[id].io_range_n  = 0;
+    tasks[id].has_io_caps = 0;
+
     tasks[id].cspace[0].type   = CAP_TCB;
     tasks[id].cspace[0].rights = CAP_RIGHT_ALL;
     tasks[id].cspace[0].object = id;
@@ -755,8 +761,21 @@ void set_current_task(int v) {
     int c = this_cpu();
     if (c < 0 || c >= MAX_CPUS) c = 0;
     percpu_current_task[c] = v;
-    
+
     if (c == 0) current_task = v;
+
+    /* Keep this CPU's TSS I/O-permission bitmap in step with the task about to
+     * run: a driver task's granted CAP_IO_PORT windows are opened, every other
+     * task runs with all ports denied. We read the task's pre-built io-port cache
+     * (populated by cap_cache_io_ports on grant) *without* taking cap_lock — this
+     * runs in the ISR/switch path with interrupts already off, and spin_unlock
+     * would sti at depth 0 and re-enable interrupts mid-switch. The cache is only
+     * mutated in normal cap-grant/teardown context, so a lock-free read here is a
+     * stale-tolerant hint on top of the authoritative capability system (SMP: a
+     * torn read at worst mis-sets a bit for one quantum; the cap system still
+     * gates every operation). */
+    const tcb_t *t = (v >= 0 && v < MAX_TASKS && tasks[v].cspace) ? &tasks[v] : 0;
+    tss_load_io_bitmap(c, t);
 }
 
 void scheduler_lock_acquire(void) { spin_lock(&scheduler_lock); }

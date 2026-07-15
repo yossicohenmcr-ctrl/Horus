@@ -257,6 +257,17 @@ struct fs_stat {
 #define CAP_ENCRYPTED_STORAGE   9
 #define CAP_REVOCATION          10
 #define CAP_BLOCK_DEV           11
+/* Device-driver capabilities (ring-3 driver framework). New type constants only:
+ * they do NOT change struct capability's layout, so the FFI offset asserts in
+ * capability.c and rust/src/capability.rs are unaffected. */
+#define CAP_IO_PORT             14   /* object = (base<<16)|count : grants those x86 I/O ports */
+#define CAP_IRQ                 15   /* object = IRQ line number : lets the holder claim/ack it */
+#define CAP_MMIO                16   /* object = phys base; badge = length (Phase 2 / VGA) */
+
+/* Max distinct I/O-port windows a single driver task can be granted (cached on
+ * the tcb for the TSS I/O bitmap). ATA needs 2 (0x1F0-0x1F7 and 0x3F6); the
+ * console phase needs a handful more. */
+#define HORUS_MAX_IO_RANGES     8
 
 #define CAP_RIGHT_READ          (1u << 0)
 #define CAP_RIGHT_WRITE         (1u << 1)
@@ -475,7 +486,17 @@ typedef struct tcb {
     uint32_t sig_altstack_size;
     uint32_t sig_on_stack;
 
-    uint8_t  padding[8];
+    /* Ring-3 driver I/O ports: the port windows this task may touch, cached from
+     * its held CAP_IO_PORT capabilities so set_tss_kernel_stack() can rebuild the
+     * per-CPU TSS I/O-permission bitmap on a switch to a driver task without
+     * scanning the cspace. `has_io_caps == 0` (the common case for every
+     * non-driver task) keeps the bitmap all-deny and skips any rewrite, so the
+     * fast path costs nothing. Populated by cap_cache_io_ports() when a
+     * CAP_IO_PORT is installed/granted, and cleared on task-slot reuse. */
+    uint16_t io_port_base[HORUS_MAX_IO_RANGES];
+    uint16_t io_port_count[HORUS_MAX_IO_RANGES];
+    uint32_t io_range_n;
+    int      has_io_caps;
 } tcb_t;
 
 extern tcb_t tasks[MAX_TASKS];
@@ -702,6 +723,15 @@ bool     rust_cow_copy_required(bool is_cow, bool is_write, uint16_t ref_count);
  * an unmapped address. Pure value predicate (no pointer deref); fails closed. */
 bool     rust_signal_handler_addr_ok(uint32_t vaddr);
 
+/* Device-capability range validators (rust/src/device.rs), for the ring-3 driver
+ * framework: decide from an unforgeable CAP_IO_PORT / CAP_MMIO exactly which I/O
+ * ports / physical MMIO region a driver may touch. Fail-closed, overflow-safe,
+ * pure value predicates (no pointer deref). */
+bool     rust_io_port_window_ok(uint64_t cap_object);
+bool     rust_io_port_range_ok(uint64_t cap_object, uint32_t req_base, uint32_t req_count);
+bool     rust_mmio_region_ok(uint64_t cap_object, uint64_t cap_len,
+                             uint64_t req_phys, uint64_t req_len);
+
 /* Centralized capability serial allocation (wrap logic lives in Rust). */
 uint32_t rust_cap_alloc_serial(uint32_t *next_serial);
 
@@ -732,6 +762,11 @@ void print_section(const char *title, uint8_t color);
 void idt_init64(void);
 void pic_init(void);
 void set_tss_kernel_stack(uint64_t kstack_top);
+/* Load the incoming ring-3 task's granted I/O ports into the running CPU's TSS
+ * I/O-permission bitmap (default-deny for a task with no CAP_IO_PORT). Called
+ * from set_current_task on every context switch; a no-op fast path when neither
+ * the outgoing nor incoming task holds port caps. `task` may be NULL (deny). */
+void tss_load_io_bitmap(int cpu, const tcb_t *task);
 void cpu_detect_features(void);
 void ramfs_init(void);
 int ata_init(void);   /* probe primary master; 1 = ATA disk present, 0 = absent */
@@ -749,6 +784,12 @@ void cpu_enable_protections(void);
 void paging_init(void);
 
 void cap_init(void);
+/* Rebuild a task's cached CAP_IO_PORT windows (tcb.io_port_*) from its live
+ * cspace, so the TSS I/O bitmap loaded on a context switch reflects exactly the
+ * port capabilities the task currently holds (revocation-safe: a revoked/zeroed
+ * CAP_IO_PORT simply is not found). Called after any cap install/grant onto the
+ * task and defensively at switch time for driver tasks. */
+void cap_cache_io_ports(int pid);
 capability_t *cap_lookup(uint32_t slot, uint32_t required_rights);
 /* Non-retrying variant of cap_lookup for callers that ALREADY hold cap_lock
  * (kcap_lookup via cap_mint/cap_transfer, task_kill_authorized via
