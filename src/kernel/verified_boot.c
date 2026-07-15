@@ -24,6 +24,14 @@
  */
 #include "kernel.h"
 
+#if defined(VBOOT_SELFTEST) || defined(VBOOT_ENFORCE)
+static void halt_forever(void) {
+    for (;;) {
+        __asm__ volatile ("cli; hlt" ::: "memory");
+    }
+}
+#endif
+
 #ifdef VBOOT_SELFTEST
 
 /* Fixed trust anchor: an Ed25519 public key (32 bytes). In the self-test this is
@@ -47,12 +55,6 @@ static const uint8_t VBOOT_SIG[64] = {
     0x87, 0x2a, 0x7f, 0xa7, 0x38, 0x30, 0xce, 0x21, 0x0e, 0x38, 0x91, 0xd5, 0x1f, 0x15, 0x73, 0xc9,
     0x39, 0x2c, 0x28, 0xf3, 0xfe, 0xf5, 0x90, 0xef, 0x77, 0x5d, 0x2e, 0x55, 0xcf, 0xac, 0x21, 0x07,
 };
-
-static void halt_forever(void) {
-    for (;;) {
-        __asm__ volatile ("cli; hlt" ::: "memory");
-    }
-}
 
 void verified_boot_selftest(void) {
     /* Copy the payload so the tamper build can corrupt it after the anchor is
@@ -89,3 +91,54 @@ void verified_boot_selftest(void) {
 }
 
 #endif /* VBOOT_SELFTEST */
+
+#ifdef VBOOT_ENFORCE
+/*
+ * Real-image verified boot (audit finding 3.3, Phase B — anchoring).
+ *
+ * Unlike the self-test above (which verifies a fixed embedded manifest), this
+ * path verifies the ACTUAL loaded kernel image against an Ed25519 signature
+ * over its own bytes. On success it RETURNS and the machine boots; on any
+ * failure it halts. This is what makes the machine refuse to run a tampered
+ * image.
+ *
+ * Layout (linker64_vboot.ld): the kernel is one contiguous PT_LOAD, so the
+ * bytes in memory over [__image_start, __vboot_sig_start) are byte-for-byte the
+ * bytes the release signer hashed from the ELF. `vboot_signature` is the
+ * 64-byte detached signature, patched into the .vboot_sig slot after the build
+ * by tools/vboot_sign.sh (it lives OUTSIDE the signed region). The trust anchor
+ * (public key) is compiled in from the generated vboot_anchor.h — for the smoke
+ * test an ephemeral key; for a release the offline signing key's public half.
+ */
+#include "vboot_anchor.h"   /* defines: static const uint8_t VBOOT_ANCHOR_PUBKEY[32] */
+
+extern const uint8_t __image_start[];
+extern const uint8_t __vboot_sig_start[];
+
+/* The detached signature slot: 64 zero bytes at build time, patched with the
+ * real Ed25519 signature (R||S) post-build. `used` + the section attribute keep
+ * it in the image at __vboot_sig_start; `volatile` stops the compiler assuming
+ * its zero initializer still holds at runtime. */
+__attribute__((section(".vboot_sig"), aligned(64), used))
+volatile const uint8_t vboot_signature[64] = {0};
+
+void verified_boot_enforce(void) {
+    const uint8_t *img = __image_start;
+    /* Hashed region excludes the signature slot (a signature can't cover
+     * itself): [__image_start, __vboot_sig_start). */
+    size_t len = (size_t)(__vboot_sig_start - __image_start);
+
+    /* Cast away volatile for the read-only verify call; the bytes are fixed by
+     * the time we run. */
+    const uint8_t *sig = (const uint8_t *)vboot_signature;
+
+    int ok = rust_ed25519_verify(VBOOT_ANCHOR_PUBKEY, sig, img, len);
+
+    if (ok) {
+        println("VBOOT_ENFORCE: PASS kernel image signature verified -- boot authorized");
+        return;   /* authorized: continue booting */
+    }
+    println("VBOOT_ENFORCE: FAIL kernel image signature invalid -- halting boot");
+    halt_forever();
+}
+#endif /* VBOOT_ENFORCE */
