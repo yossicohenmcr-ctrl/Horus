@@ -60,7 +60,7 @@ five runtime self-tests in CI. Already in place:
   `smoke-session` integration test, the `smoke-vboot` Ed25519 verified-boot gate,
   a `reproducible` build check, a
   `security` SAST/SBOM scan, and a `tla` TLA+ model-checking job (TLC verifies
-  the capability-algebra, paging-isolation, and two-CPU seqlock invariants). The whole filesystem suite (persistence,
+  the capability-algebra, paging-isolation, two-CPU seqlock, IPC-TOCTOU, and SMP-scheduler invariants). The whole filesystem suite (persistence,
   permissions, concurrency, journal crash-recovery, large files), the newlib
   libc port, and async notifications are now CI-enforced, not local-only.
 
@@ -256,10 +256,13 @@ Cross-cutting work that should grow alongside every other phase.
   round-trips) and grow the assertion vocabulary.
 - **Fuzzing**: coverage-guided fuzzing (libFuzzer or AFL++) of the syscall
   interface and the Rust FFI boundary.
-- **Model checking**: TLC now checks three TLA+ specifications (`docs/cap_algebra.tla`
+- **Model checking**: TLC now checks five TLA+ specifications (`docs/cap_algebra.tla`
   subset-rights non-escalation, `docs/paging_isolation.tla` per-task frame isolation,
-  `docs/cap_seqlock.tla` two-CPU seqlock no-torn-read) in CI (`tla` job). The next
-  step is to extend them to cover IPC and the scheduler.
+  `docs/cap_seqlock.tla` two-CPU seqlock no-torn-read, `docs/ipc_toctou.tla` IPC
+  lookup/use no-use-after-revoke, `docs/sched_smp.tla` SMP run-pool no-double-run) in
+  CI (`tla` job). Each carries a falsification switch. The next step is to extend the
+  specs to cover the notification/wait paths and to model liveness (no lost wakeup),
+  not just safety.
 - **Formal verification**: apply Verus or Kani to the capability operations in
   `rust/src/capability.rs`.
 - **User/kernel address separation**: the kernel is linked low (1 MiB) and its

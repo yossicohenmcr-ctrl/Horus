@@ -482,7 +482,8 @@ jobs:
 
       # BLOCKING gate: TLC exhaustively checks each spec's safety invariants and
       # exits non-zero (12) on any violation. The specs are real and falsifiable
-      # (subset-rights non-escalation; per-task frame isolation; and the two-CPU
-      # seqlock's no-torn-capability-read property), not decorative.
-      - name: Model-check TLA+ specs (cap algebra + paging isolation + seqlock)
+      # (subset-rights non-escalation; per-task frame isolation; the two-CPU
+      # seqlock's no-torn-read; the IPC lookup/use no-use-after-revoke; and the
+      # SMP run-pool no-double-run properties), not decorative.
+      - name: Model-check TLA+ specs (cap algebra, paging, seqlock, IPC TOCTOU, SMP sched)
         run: make verify-tla
