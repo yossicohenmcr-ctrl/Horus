@@ -102,7 +102,7 @@ Removes compiled objects, the Rust build cache, and `tools/mkheadered`. Does not
 
 ### `make test`
 
-Runs the Rust unit tests (63 across the security core — see [TESTS.md](../TESTS.md)), then does a clean full build to verify compilation.
+Runs the Rust unit tests (84 across the security core — see [TESTS.md](../TESTS.md)), then does a clean full build to verify compilation.
 
 ### Headless self-test targets
 
@@ -115,6 +115,8 @@ Each of these does a clean build with the relevant `*_SELFTEST` (or `SMP`) flag,
 | `make smoke-preempt` | The timer preempts and time-slices two non-yielding ring-3 tasks (`PREEMPT_SELFTEST: PASS`) |
 | `make smoke-signal` | A task faults on purpose and its registered handler runs instead of being killed (`SIGNAL_SELFTEST: PASS`) |
 | `make smoke-proc` | Ring-3 process control: exit + kill + spawn + exec + grant + signal + wait (+ fault-wait) (`PROC_SELFTEST: PASS …`) |
+| `make smoke-notify` | An async `SYS_NOTIFY` badge reaches a task blocked in `SYS_WAIT_NOTIFY` (`NOTIFY_SELFTEST: PASS`) |
+| `make smoke-vboot` | The Ed25519 verified-boot gate: a fixed manifest self-test **and** `make smoke-vboot-image` (signs the real kernel bytes, boots the enforcing image, flips a byte, asserts it halts) |
 | `make smoke-fs` | The ring-3 `fs_server` + a client drive the full path over IPC (`FS_SELFTEST: PASS`); `make smoke-fs STORAGE=ata` runs it against a real ATA image |
 | `make smoke-fs-persist` / `-perms` / `-conc` / `-wal` / `-large` | Filesystem persistence across reboot, per-file POSIX permissions, multi-client concurrency, the write-ahead journal replay, and large/double-indirect files (local) |
 | `make smoke-init-fs` | The `init`-delegated `fs_server` driven by an automated client end-to-end (local) |

@@ -108,12 +108,12 @@ help
 16. **smoke-fs-large** — direct + single- + double-indirect block I/O
 17. **smoke-newlib** — `make smoke-newlib` (newlib libc over the POSIX fd layer)
 18. **smoke-session** — `make smoke-session` (drives the real ring-3 shell over serial: auth + least-privilege enforcement)
-19. **smoke-vboot** — `make smoke-vboot` (Ed25519 verified-boot gate: a valid signed manifest authorizes boot and a tampered one halts it — both paths asserted)
+19. **smoke-vboot** — the Ed25519 verified-boot gate, run in two steps: `make smoke-vboot` (a fixed signed manifest authorizes boot and a tampered one halts it) **and** `make smoke-vboot-image`, which signs the **real** kernel bytes with an ephemeral key, boots the enforcing image, then flips a byte and asserts the kernel halts before init — both paths asserted
 20. **reproducible** — builds `kernel.elf` twice and fails if they are not byte-for-byte identical
 21. **security** — Semgrep, Trivy, gitleaks, cppcheck, flawfinder, `cargo-audit`, and a CycloneDX SBOM (advisory)
 22. **tla** — `make verify-tla`: TLC model-checks five specs — `docs/cap_algebra.tla` (subset-rights non-escalation), `docs/paging_isolation.tla` (per-task frame isolation), `docs/cap_seqlock.tla` (two-CPU seqlock: no torn capability read), `docs/ipc_toctou.tla` (IPC lookup/use: no use-after-revoke), and `docs/sched_smp.tla` (SMP run-pool: no task on two CPUs); a violated invariant fails the build
 
-That is three build/lint jobs, fourteen headless QEMU self-tests (items 4–17) plus the scripted `smoke-session` integration test and the `smoke-vboot` verified-boot gate, and the reproducible-build, security, and TLA+ model-checking jobs. All but the security job use only first-party / pinned actions. **These counts are enforced:** `tools/check_doc_counts.sh` fails CI if the number of `#[test]`s or `ci.yml` jobs drifts from the marker at the top of this file or from any tracked doc.
+That is three build/lint jobs, fourteen headless QEMU self-tests (items 4–17) plus the scripted `smoke-session` integration test and the `smoke-vboot` verified-boot gate (both of which also boot the kernel under QEMU), and the reproducible-build, security, and TLA+ model-checking jobs. All but the security job use only first-party / pinned actions. **These counts are enforced:** `tools/check_doc_counts.sh` fails CI if the number of `#[test]`s or `ci.yml` jobs drifts from the marker at the top of this file or from any tracked doc.
 
 ---
 
@@ -127,7 +127,7 @@ The gaps that remain:
 
 ### A real C-side test harness
 
-`tests/test_capability.c` is a standalone illustration that reimplements a simplified `cap_lookup`; it is **not** linked against the kernel's `capability.c` and is not built by the Makefile. A host harness linking the real `capability.c` with mocked `tasks[]` / `get_current_task()` would give the C guards genuine regression coverage.
+The `tests/` directory holds host-side test code. Its one file, `tests/test_capability.c`, is a standalone illustration that reimplements a simplified `cap_lookup`; it is **not** linked against the kernel's `capability.c` and is not built by the Makefile — treat it as a reference for intended syscall sequences, not coverage. A host harness linking the real `src/kernel/capability.c` with mocked `tasks[]` / `get_current_task()` would give the C guards genuine regression coverage; `test_capability.c` is a starting point.
 
 ### Fuzzing
 

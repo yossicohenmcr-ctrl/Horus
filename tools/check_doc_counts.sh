@@ -60,9 +60,10 @@ decl_jobs=$(printf '%s'  "$marker" | grep -oE 'ci_jobs=[0-9]+'         | grep -o
 # The live docs that quote the counts. Both digit ("20 jobs") and English
 # word-form ("twenty gated jobs") are checked, since the original drift hid a
 # spelled-out "eleven jobs" from a digits-only scan. Historical records
-# (CHANGES.md, the changelog) are intentionally out of scope — a past release
-# legitimately reports the count it shipped with.
-TRACKED_DOCS=(README.md SECURITY.md TESTS.md docs/README.md docs/LIMITATIONS.md docs/ROADMAP.md)
+# (CHANGELOG.md) are intentionally out of scope — a past release legitimately
+# reports the count it shipped with. (The current-status limitations breakdown
+# lives in SECURITY.md, which is already tracked below.)
+TRACKED_DOCS=(README.md SECURITY.md TESTS.md docs/README.md docs/ROADMAP.md)
 
 # English number words -> value, covering any realistic CI job count. A spelled
 # count outside this range simply isn't matched (the digit form still is).
