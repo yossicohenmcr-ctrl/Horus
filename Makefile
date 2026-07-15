@@ -924,7 +924,14 @@ cargo-audit:
 # ---------------------------------------------------------------------------
 TLA_TOOLS_VERSION := 1.8.0
 TLA_TOOLS_JAR     := tla2tools.jar
-TLA_TOOLS_SHA256  := 150b0294c3d407c15f0c971351ccd4ae8c6d885397546dff87871a14be2b4ee4
+# NOTE: this is a mutable GitHub release asset — upstream re-published the v1.8.0
+# tla2tools.jar on 2026-07-15 (a rebuilt but functionally identical jar), which
+# rotated its hash and broke the old pin (150b0294…). The value below was
+# verified against the GitHub release API's authoritative asset digest and by
+# inspecting the jar (Implementation-Title "TLA+ Tools", Microsoft vendor,
+# tlc2.TLC main class, full tlc2/tla2sany/pcal package set). If CI breaks here
+# again with a hash mismatch, re-verify the same way before rotating this pin.
+TLA_TOOLS_SHA256  := 58d44845a37a8d776deaf8cf3a623213b59d311bc0ec287bcdfbe148dd11bb3d
 TLA_TOOLS_URL     := https://github.com/tlaplus/tlaplus/releases/download/v$(TLA_TOOLS_VERSION)/$(TLA_TOOLS_JAR)
 
 $(TLA_TOOLS_JAR):
