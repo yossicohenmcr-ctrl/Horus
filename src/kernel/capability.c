@@ -217,6 +217,27 @@ void cap_cache_io_ports(int pid) {
 }
 
 /*
+ * True iff the current task holds a CAP_IRQ capability naming exactly `irq`.
+ * Least-privilege gate for SYS_IRQ_REGISTER / SYS_IRQ_ACK: a driver may bind or
+ * ack only the specific line its capability names, not merely any device line.
+ * Scans the caller's own cspace under cap_lock; fail-closed on any inconsistency.
+ */
+int caller_holds_irq_cap(int irq) {
+    int pid = get_current_task();
+    if (pid < 0 || pid >= MAX_TASKS) return 0;
+    tcb_t *t = &tasks[pid];
+    if (!t->cspace) return 0;                 /* only the boot task, no ring-3 caller */
+    int held = 0;
+    spin_lock(&cap_lock);
+    for (uint32_t s = 0; s < t->cspace_size; s++) {
+        capability_t *c = &t->cspace[s];
+        if (c->type == CAP_IRQ && (int)c->object == irq) { held = 1; break; }
+    }
+    spin_unlock(&cap_lock);
+    return held;
+}
+
+/*
  * Resolve a capability slot for the current task, fail-closed.
  *
  * The root_cnode fallback is KERNEL-ONLY. Every non-kernel task resolves

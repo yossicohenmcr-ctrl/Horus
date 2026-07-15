@@ -148,6 +148,8 @@ void h_ipc_sender(struct regs *r);
 void h_ipc_reply_to(struct regs *r);
 void h_notify(struct regs *r);
 void h_wait_notify(struct regs *r);
+void h_irq_register(struct regs *r);
+void h_irq_ack(struct regs *r);
 /* selftest.c (test-only trace hook) */
 #ifdef PREEMPT_SELFTEST
 void h_preempt_trace(struct regs *r);

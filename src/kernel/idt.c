@@ -163,6 +163,51 @@ int try_deliver_fault_signal(struct interrupt_frame64 *frame, int cur,
     return 1;
 }
 
+/* ---- IRQ -> notification bridge (ring-3 device drivers) ------------------- *
+ * A ring-3 driver binds a hardware IRQ to one of its notification slots via
+ * SYS_IRQ_REGISTER. On that line's interrupt the kernel keeps full control of the
+ * PIC -- it EOIs immediately, masks the line so it cannot re-fire, and delivers a
+ * notification to the driver. The driver services the device through its granted
+ * ports (TSS I/O bitmap) and calls SYS_IRQ_ACK to unmask the line again. A driver
+ * that never acks stalls only its own line, never the kernel or other drivers.
+ * The kernel never runs driver code in ring 0 and never hands out IOPL/EOI. */
+struct irq_binding { int task; uint32_t notif_slot; int armed; };
+static struct irq_binding irq_table[16];
+
+/* Mask (masked=1) or unmask (masked=0) one PIC line. A slave line (8..15) also
+ * needs the master's cascade line (IRQ2) unmasked to reach the CPU. */
+static void pic_set_mask(int irq, int masked) {
+    uint16_t port = (irq < 8) ? 0x21 : 0xA1;
+    uint8_t  bit  = (irq < 8) ? (uint8_t)irq : (uint8_t)(irq - 8);
+    uint8_t  v    = inb(port);
+    if (masked) v |= (uint8_t)(1u << bit);
+    else        v &= (uint8_t)~(1u << bit);
+    outb(port, v);
+    if (irq >= 8 && !masked) {                  /* keep the cascade open */
+        uint8_t m = inb(0x21);
+        m &= (uint8_t)~(1u << 2);
+        outb(0x21, m);
+    }
+}
+
+/* SYS_IRQ_REGISTER back end (authorization is enforced by the syscall handler).
+ * Records the binding and unmasks the line so delivery can begin. */
+int irq_bridge_register(int irq, uint32_t notif_slot, int task) {
+    if (irq < 0 || irq >= 16) return -1;
+    irq_table[irq].task       = task;
+    irq_table[irq].notif_slot = notif_slot;
+    irq_table[irq].armed      = 1;
+    pic_set_mask(irq, 0);
+    return 0;
+}
+
+/* SYS_IRQ_ACK back end: re-unmask a line the delivery path masked. */
+int irq_bridge_ack(int irq) {
+    if (irq < 0 || irq >= 16 || !irq_table[irq].armed) return -1;
+    pic_set_mask(irq, 0);
+    return 0;
+}
+
 uint64_t interrupt_handler64(struct interrupt_frame64 *frame)
 {
     uint64_t vector = frame->int_no;
@@ -199,6 +244,16 @@ uint64_t interrupt_handler64(struct interrupt_frame64 *frame)
             }
         }
         outb(0x20, 0x20);
+    } else if (vector >= 34 && vector <= 47 && irq_table[vector - 32].armed) {
+        /* A device IRQ bound to a ring-3 driver. Keep the PIC in ring 0: EOI the
+         * PIC(s), mask this line so it cannot re-fire until the driver acks, then
+         * notify the driver task. No driver code runs here; we only post a wake. */
+        int irq = (int)vector - 32;
+        if (irq >= 8) outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+        pic_set_mask(irq, 1);
+        sys_notify(irq_table[irq].notif_slot, 1u << irq);
+        return (uint64_t)frame;
 #ifdef SMP
     } else if (vector == 0x40) {
         /* LAPIC timer: the application processors' preemption tick (the legacy

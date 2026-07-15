@@ -120,6 +120,11 @@ struct audit_event {
 #define SYS_IPC_SENDER         73   /* (ep, uint32_t *out_gid) -> uid; kernel-attested identity of an endpoint's last sender */
 #define SYS_FS_SET_META        74   /* (ino, mode, uid, gid) -> 0; persist an inode's owner/mode (fs server only) */
 #define SYS_IPC_REPLY_TO       75   /* (req_ep, msg, len) -> 0; reply to the last sender on req_ep (multi-client safe routing) */
+/* Ring-3 device-driver framework: bind a hardware IRQ to a notification slot so a
+ * ring-3 driver services the device, while the kernel keeps the PIC/EOI. Both are
+ * gated by a CAP_IRQ naming the exact line (checked in-handler). */
+#define SYS_IRQ_REGISTER       76   /* (irq, notif_slot) -> 0; deliver `irq` as a notification, unmask the line */
+#define SYS_IRQ_ACK            77   /* (irq) -> 0; re-unmask the line after the driver has serviced the device */
 
 /* Signal numbers (1..31). A task registers a handler with sys_signal() (see
  * below); an unhandled signal terminates the target (default action). */
@@ -357,6 +362,20 @@ static inline int sys_wait_notify(int notif_slot, uint32_t *out_badge) {
                  : "ecx", "edx", "memory");
     if (out_badge) *out_badge = badge;
     return (int)ret;
+}
+
+/* Bind hardware IRQ `irq` to notification slot `notif_slot`. From then on the
+ * kernel EOIs + masks the line and sends a notification (badge = 1<<irq); the
+ * driver waits on the slot, services the device via its granted ports, then calls
+ * sys_irq_ack(irq). Requires a CAP_IRQ naming `irq`. Returns 0 on success. */
+static inline int sys_irq_register(int irq, int notif_slot) {
+    return (int)syscall(SYS_IRQ_REGISTER, (uint32_t)irq, (uint32_t)notif_slot, 0);
+}
+
+/* Re-unmask IRQ `irq` after servicing the device (the kernel masked it on
+ * delivery so it cannot re-fire until acked). Requires a CAP_IRQ naming `irq`. */
+static inline int sys_irq_ack(int irq) {
+    return (int)syscall(SYS_IRQ_ACK, (uint32_t)irq, 0, 0);
 }
 
 static inline int sys_receive_program(struct program_header *hdr_out) {

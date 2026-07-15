@@ -509,5 +509,22 @@ void h_wait_notify(struct regs *r) {
     r->ebx = badge;
 }
 
+/* SYS_IRQ_REGISTER (76): bind hardware IRQ ebx to notification slot ecx. The
+ * authorizing slot varies per driver, so the table cannot express a fixed gate;
+ * we enforce here that the caller holds a CAP_IRQ naming exactly this line. */
+void h_irq_register(struct regs *r) {
+    int irq = (int)r->ebx;
+    if (irq < 0 || irq >= 16 || !caller_holds_irq_cap(irq)) { r->eax = (uint32_t)-1; return; }
+    r->eax = (uint32_t)irq_bridge_register(irq, r->ecx, get_current_task());
+}
+
+/* SYS_IRQ_ACK (77): re-unmask IRQ ebx after servicing the device. Same
+ * CAP_IRQ-naming-the-line gate as SYS_IRQ_REGISTER. */
+void h_irq_ack(struct regs *r) {
+    int irq = (int)r->ebx;
+    if (irq < 0 || irq >= 16 || !caller_holds_irq_cap(irq)) { r->eax = (uint32_t)-1; return; }
+    r->eax = (uint32_t)irq_bridge_ack(irq);
+}
+
 /* user management (33/34/35): admin/self check lives in do_useradd/userdel/passwd. */
 

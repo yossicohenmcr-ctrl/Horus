@@ -216,6 +216,8 @@ void users_init(void);
 #define SYS_IPC_SENDER         73   /* (ep, uint32_t *out_gid) -> uid; kernel-attested identity of the last sender on `ep` (unforgeable, set at login) */
 #define SYS_FS_SET_META        74   /* (ino, mode, uid, gid) -> 0; persist an inode's owner/mode (object-store server only: uid 0 + CAP_BLOCK_DEV) */
 #define SYS_IPC_REPLY_TO       75   /* (req_ep, msg, len) -> 0; reply to the task that sent the last request on req_ep (routed by kernel-recorded sender, not a shared reply endpoint) — multi-client safe */
+#define SYS_IRQ_REGISTER       76   /* (irq, notif_slot) -> 0; ring-3 driver binds a hardware IRQ to a notification slot (CAP_IRQ naming the line) */
+#define SYS_IRQ_ACK            77   /* (irq) -> 0; ring-3 driver re-unmasks the line after servicing the device (CAP_IRQ naming the line) */
 
 /* Minimum size of a registered alternate signal stack (SYS_SIGALTSTACK); smaller
  * requests fail closed so a handler always has room for at least a shallow frame. */
@@ -790,6 +792,16 @@ void cap_init(void);
  * CAP_IO_PORT simply is not found). Called after any cap install/grant onto the
  * task and defensively at switch time for driver tasks. */
 void cap_cache_io_ports(int pid);
+/* True iff the current task holds a CAP_IRQ capability naming exactly `irq`.
+ * The least-privilege gate for the SYS_IRQ_REGISTER / SYS_IRQ_ACK bridge. */
+int caller_holds_irq_cap(int irq);
+/* IRQ -> notification bridge back ends (src/kernel/idt.c). register binds a line
+ * to a driver's notification slot and unmasks it; ack re-unmasks after service. */
+int irq_bridge_register(int irq, uint32_t notif_slot, int task);
+int irq_bridge_ack(int irq);
+/* Deliver a badge to a notification slot, waking any blocked waiter (syscall_ipc.c).
+ * Also called from interrupt context by the IRQ bridge. */
+int sys_notify(uint32_t notif_slot, uint32_t badge);
 capability_t *cap_lookup(uint32_t slot, uint32_t required_rights);
 /* Non-retrying variant of cap_lookup for callers that ALREADY hold cap_lock
  * (kcap_lookup via cap_mint/cap_transfer, task_kill_authorized via
