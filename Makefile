@@ -49,6 +49,27 @@ ifeq ($(MINIMAL_SECURE),1)
 CFLAGS += -DMINIMAL_SECURE=1
 endif
 
+# STORAGE_RING3_DISK=1 routes the kernel's live encrypted object store through the
+# ring-3 disk_server (evicting the in-kernel ata.c driver from the primary disk).
+# The storage stack runs on the in-kernel `storaged` coroutine so it can block on
+# the ring-3 driver; see src/kernel/storaged.c. Off by default: the default build
+# keeps the proven in-kernel ATA path byte-for-byte. USERSPACE_CFLAGS/embed wiring
+# for disk_server is added under this flag further below.
+STORAGE_RING3_DISK ?= 0
+# STORAGED_SELFTEST=1 runs a boot-time proof of the storaged coroutine's mid-call
+# save/restore across a yield (prints STORAGED_SELFTEST: PASS); it implies the
+# storaged core. Gated off the ship kernel.
+STORAGED_SELFTEST ?= 0
+ifeq ($(STORAGED_SELFTEST),1)
+CFLAGS  += -DSTORAGED_SELFTEST
+STORAGE_RING3_DISK := 1
+endif
+ifeq ($(STORAGE_RING3_DISK),1)
+CFLAGS  += -DSTORAGE_RING3_DISK
+ASFLAGS += -DSTORAGE_RING3_DISK
+OBJS    += src/kernel/storaged.o
+endif
+
 DEBUG_SHELL ?= 0
 ifeq ($(DEBUG_SHELL),1)
 CFLAGS += -DDEBUG_SHELL
@@ -613,6 +634,17 @@ smoke-init-fs:
 # The test disk (SMOKE_DISK2, IDE index 1 = primary SLAVE) is driven by the ring-3
 # server; the kernel's object store only touches the primary master, so the two
 # never contend. Single boot; a fresh zeroed image is fine (server writes, reads).
+.PHONY: smoke-storaged
+# Phase-1 proof of the storaged coroutine: kswitch saves/restores a mid-call kernel
+# stack across a yield (prints STORAGED_SELFTEST: PASS at boot). No disk needed.
+smoke-storaged:
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory STORAGED_SELFTEST=1
+	@$(MAKE) --no-print-directory boot.iso
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
+		REQUIRE_MARKER='STORAGED_SELFTEST: PASS' FAIL_MARKER='STORAGED_SELFTEST: FAIL' \
+		tools/smoke_test.sh boot.iso
+
 .PHONY: smoke-disk-server
 smoke-disk-server:
 	@$(MAKE) --no-print-directory clean

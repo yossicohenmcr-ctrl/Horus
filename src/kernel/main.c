@@ -91,6 +91,11 @@ void kernel_main(uint32_t mb_info) {
                      * falls back to the ephemeral RAM vdisk when none is present */
 #endif
     scheduler_init();
+#ifdef STORAGED_SELFTEST
+    /* Phase-1 proof of the storaged coroutine (mid-call save/restore across a
+     * yield). Pure kernel, no userspace; runs before smp_bringup drops to ring 3. */
+    storaged_selftest();
+#endif
     smp_bringup();
     __asm__ volatile ("sti" ::: "memory");
     aslr_init_seed();

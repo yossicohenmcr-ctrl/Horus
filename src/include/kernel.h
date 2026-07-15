@@ -802,6 +802,19 @@ int irq_bridge_ack(int irq);
 /* Deliver a badge to a notification slot, waking any blocked waiter (syscall_ipc.c).
  * Also called from interrupt context by the IRQ bridge. */
 int sys_notify(uint32_t notif_slot, uint32_t badge);
+
+#ifdef STORAGE_RING3_DISK
+/* storaged: the in-kernel storage-service coroutine (src/kernel/storaged.c). Its
+ * stack is crafted by storaged_bootstrap(); storaged_activate() runs it until it
+ * yields (needs disk I/O, or idle); storaged_yield() suspends it back to its
+ * activator with the mid-op kernel stack intact. */
+void storaged_bootstrap(void);
+void storaged_activate(void);
+void storaged_yield(void);
+#ifdef STORAGED_SELFTEST
+void storaged_selftest(void);
+#endif
+#endif
 capability_t *cap_lookup(uint32_t slot, uint32_t required_rights);
 /* Non-retrying variant of cap_lookup for callers that ALREADY hold cap_lock
  * (kcap_lookup via cap_mint/cap_transfer, task_kill_authorized via
