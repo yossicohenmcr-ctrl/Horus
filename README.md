@@ -141,7 +141,7 @@ Full posture, threat model, and known limitations: **[SECURITY.md](SECURITY.md)*
 | Copy-on-write paging | 🟡 Partial |
 | SMP as default (per-CPU run queues, priorities) | ⬜ Not yet (works behind `SMP=1`) |
 
-Verified by 84 Rust unit tests + a 22-job CI pipeline. See [TESTS.md](TESTS.md) for the exact coverage and [SECURITY.md](SECURITY.md#known-limitations--current-status) for the candid limitations.
+Verified by 89 Rust unit tests + a 22-job CI pipeline. See [TESTS.md](TESTS.md) for the exact coverage and [SECURITY.md](SECURITY.md#known-limitations--current-status) for the candid limitations.
 
 ---
 
@@ -171,7 +171,7 @@ Default login: `user` / `password` (or `root` / `rootpass`).
 ### Verify it
 
 ```bash
-make test               # Rust unit tests (84) + a clean full build
+make test               # Rust unit tests (89) + a clean full build
 make smoke              # headless QEMU boot to the ring-3 login prompt, no fault
 make smoke-proc         # ring-3 process control: exit/kill/spawn/exec/grant/signal/wait
 make reproducible-build # byte-for-byte deterministic kernel.elf

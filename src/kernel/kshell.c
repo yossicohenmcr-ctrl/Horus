@@ -399,6 +399,19 @@ void spawn_initial_userspace_init(void) {
         cap_install_from_root(pid, 6, 6, 0);    /* root[6] = CAP_USER (ALL)                 */
         cap_install_from_root(pid, 10, 2, 0);   /* root[2] = CAP_ENDPOINT, object 0 (gate)  */
         cap_install_from_root(pid, 11, 2, 4);   /* root[2] = CAP_ENDPOINT, object FS_EP_REQ */
+        /* Ring-3 driver framework: the ATA primary-channel device caps, so init
+         * can delegate them to the disk_server it launches (see launch_disk_server
+         * in userspace/init.c). Two CAP_IO_PORT windows + CAP_IRQ 14 + the
+         * CAP_BLOCK_DEV registration gate. init is the trusted delegation root; as
+         * with CAP_ENCRYPTED_STORAGE it holds these only to hand them down. */
+        /* The 4th arg is the cap's object and OVERRIDES the root cap's, so pass the
+         * exact encodings the disk_server expects (window (base<<16)|count, IRQ
+         * line, 0). Passing 0 here would hand init a zero-width port window and a
+         * CAP_IRQ naming line 0 -- the driver's port/IRQ claims would then fail. */
+        cap_install_from_root(pid, 12, 12, ((uint32_t)0x1F0 << 16) | 8);  /* CAP_IO_PORT 0x1F0..0x1F7 */
+        cap_install_from_root(pid, 13, 13, ((uint32_t)0x3F6 << 16) | 1);  /* CAP_IO_PORT 0x3F6        */
+        cap_install_from_root(pid, 14, 14, 14);                          /* CAP_IRQ line 14          */
+        cap_install_from_root(pid, 15, 15, 0);                           /* CAP_BLOCK_DEV            */
 
         /* do_spawn already fabricated a full trap frame; enter via the same
          * pop+iretq path every later resume uses. */

@@ -24,6 +24,7 @@ mod rng;
 mod sha256;
 mod sha512;
 mod ed25519;
+mod device;
 
 // Zero-dependency property/differential fuzz harness (host tests only). See
 // rust/src/fuzzrng.rs and the `fuzz_*` tests in each module's `mod tests`.

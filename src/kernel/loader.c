@@ -29,6 +29,10 @@ extern uint8_t embedded_fsserver_bin_end[];
 extern uint8_t embedded_fsclient_bin_start[];
 extern uint8_t embedded_fsclient_bin_end[];
 #endif
+#ifdef INIT_DISK_SELFTEST
+extern uint8_t embedded_diskserver_bin_start[];
+extern uint8_t embedded_diskserver_bin_end[];
+#endif
 #ifdef PROC_SELFTEST
 extern uint8_t embedded_exectest_bin_start[];
 extern uint8_t embedded_exectest_bin_end[];
@@ -53,6 +57,11 @@ static const struct embedded_binary embedded_binaries[] = {
     /* fsclient: spawned by name from init to drive the delegated fs_server over
      * IPC. INIT_FS_SELFTEST only. */
     { "fsclient",  embedded_fsclient_bin_start, embedded_fsclient_bin_end },
+#endif
+#ifdef INIT_DISK_SELFTEST
+    /* disk_server: spawned by name from init to drive the ATA secondary channel
+     * from ring 3 (CAP_IO_PORT + CAP_IRQ). INIT_DISK_SELFTEST only. */
+    { "disk_server", embedded_diskserver_bin_start, embedded_diskserver_bin_end },
 #endif
 #ifdef PROC_SELFTEST
     /* exectest: spawnable by name so the proc self-test can launch a child that

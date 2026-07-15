@@ -625,6 +625,13 @@ static void h_cap_grant(struct regs *r) {
     tasks[target].cspace[dest_slot] = granted;
     spin_unlock(&cap_lock);
 
+    /* If this delegated a CAP_IO_PORT window, rebuild the target's cached port set
+     * so the TSS I/O-permission bitmap opens exactly those ports on its next
+     * context switch (cap_cache_io_ports takes cap_lock, hence after the unlock).
+     * This is the grant-time analogue of the cap_install_from_root refresh, and is
+     * what lets init delegate ATA ports to the disk_server it spawns. */
+    if (granted.type == CAP_IO_PORT) cap_cache_io_ports(target);
+
     audit_log(AUDIT_CAP_TRANSFER, (uint32_t)target, 0, "cap grant");
     r->eax = 0;
 }
@@ -740,7 +747,7 @@ typedef struct {
     int      ctype;    /* required capability type, or SC_ANYTYPE */
 } syscall_desc_t;
 
-#define SYSCALL_TABLE_SIZE 76
+#define SYSCALL_TABLE_SIZE 78
 
 /* ------------------------------------------------------------------------- *
  *  Capability-checked dispatch table.
@@ -842,18 +849,23 @@ static const syscall_desc_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FS_STAT]                  = { h_fs_stat,                 7, CAP_BLOCK_DEV, SC_ANYTYPE },
     [SYS_FS_SET_SIZE]              = { h_fs_set_size,            7, CAP_BLOCK_DEV, SC_ANYTYPE },
     [SYS_BRK]                     = { h_brk,                    SC_NONE, 0, SC_ANYTYPE }, /* own heap, demand-paged */
+    /* Ring-3 driver IRQ bridge. No fixed authorizing slot (the CAP_IRQ lives in
+     * whatever cspace slot init delegated it to), so the handler enforces
+     * caller_holds_irq_cap(irq) — a cap naming the exact line — itself. */
+    [SYS_IRQ_REGISTER]            = { h_irq_register,           SC_NONE, 0, SC_ANYTYPE },
+    [SYS_IRQ_ACK]                 = { h_irq_ack,                SC_NONE, 0, SC_ANYTYPE },
 };
 
 /* Compile-time guard: the table must have a slot for every syscall number, so
  * no defined syscall can index past it and fall through the
  * `num < SYSCALL_TABLE_SIZE` bound into the deny path by accident.
- * SYS_IPC_REPLY_TO is currently the highest syscall number. Adding a higher one
+ * SYS_IRQ_ACK is currently the highest syscall number. Adding a higher one
  * (or shrinking the table) breaks the build here and forces you to grow
  * SYSCALL_TABLE_SIZE -- which lands you right next to the entries you must
  * fill in. (C cannot check the function pointer itself in a static assert; a
  * still-missing entry stays NULL and fails closed at runtime, and adding an
  * entry past the array bound is already a hard compiler error.) */
-_Static_assert(SYSCALL_TABLE_SIZE == SYS_IPC_REPLY_TO + 1,
+_Static_assert(SYSCALL_TABLE_SIZE == SYS_IRQ_ACK + 1,
                "syscall_table size must equal (highest syscall number + 1): "
                "grow SYSCALL_TABLE_SIZE and add the new entry when adding a syscall");
 

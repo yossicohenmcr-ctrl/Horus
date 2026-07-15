@@ -125,6 +125,47 @@ void cap_init(void) {
     root_cnode[9].serial = 0xC0DE0009U;
     root_cnode[9].generation = 0;
 
+    /* Device-driver authority (ring-3 driver framework). Primordial in the root
+     * cnode; init delegates these down to the disk_server with SYS_CAP_GRANT so
+     * no driver ever installs directly from root. The disk_server needs its two
+     * PIO port windows, its IRQ line, and the block-backend registration gate.
+     *
+     * These name the ATA PRIMARY channel PIO ports (0x1F0-0x1F7 / 0x3F6, IRQ14).
+     * The kernel's own object store also lives on the primary channel, but only
+     * ever drives the primary MASTER; the disk_server proof drives the primary
+     * SLAVE, on its own disk image. The kernel probes only the master at boot, so
+     * with a slave-only test disk it falls back to the RAM vdisk and never touches
+     * the driver's disk -- clean isolation on a dedicated IRQ (14). Fully evicting
+     * the primary-master driver is a later step: it needs an async block-I/O path,
+     * since the kernel can only block on a ring-3 server at a syscall boundary. */
+    root_cnode[12].type   = CAP_IO_PORT;                 /* ATA command/data block */
+    root_cnode[12].rights = CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT;
+    root_cnode[12].object = ((uint64_t)0x1F0 << 16) | 8; /* ports 0x1F0..0x1F7 */
+    root_cnode[12].badge  = 0;
+    root_cnode[12].serial = 0xC0DE0012U;
+    root_cnode[12].generation = 0;
+
+    root_cnode[13].type   = CAP_IO_PORT;                 /* ATA control/altstatus */
+    root_cnode[13].rights = CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT;
+    root_cnode[13].object = ((uint64_t)0x3F6 << 16) | 1; /* port 0x3F6 */
+    root_cnode[13].badge  = 0;
+    root_cnode[13].serial = 0xC0DE0013U;
+    root_cnode[13].generation = 0;
+
+    root_cnode[14].type   = CAP_IRQ;                      /* ATA primary channel IRQ */
+    root_cnode[14].rights = CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT;
+    root_cnode[14].object = 14;                           /* IRQ 14 */
+    root_cnode[14].badge  = 0;
+    root_cnode[14].serial = 0xC0DE0014U;
+    root_cnode[14].generation = 0;
+
+    root_cnode[15].type   = CAP_BLOCK_DEV;                /* register-as-block-backend gate */
+    root_cnode[15].rights = CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT;
+    root_cnode[15].object = 0;
+    root_cnode[15].badge  = 0;
+    root_cnode[15].serial = 0xC0DE0015U;
+    root_cnode[15].generation = 0;
+
     cap_next_serial = 0x00010000U;
 
     for (int i = 0; i < MAX_REV_SETS; i++) rev_sets[i].valid = 0;
@@ -148,7 +189,61 @@ int cap_install_from_root(int pid, uint32_t slot, uint32_t root_slot, uint32_t o
     tasks[pid].cspace[slot].serial     = serial;
     tasks[pid].cspace[slot].generation = 0;
     spin_unlock(&cap_lock);
+    /* Keep the TSS-bitmap cache in step if this was a port grant. */
+    if (root_cnode[root_slot].type == CAP_IO_PORT) cap_cache_io_ports(pid);
     return 0;
+}
+
+/*
+ * Rebuild task `pid`'s cached CAP_IO_PORT windows from its live cspace. The cache
+ * (tcb.io_port_base/count/io_range_n/has_io_caps) is the single thing
+ * set_current_task -> tss_load_io_bitmap consults, so this makes the TSS
+ * I/O-permission bitmap track exactly the port capabilities the task holds right
+ * now: a granted CAP_IO_PORT opens its ports on the next switch; a revoked (and
+ * therefore CAP_NULL-zeroed) slot is simply not found, so its ports close again.
+ * Each window is validated in safe Rust (rust_io_port_window_ok) so a malformed
+ * capability opens nothing rather than wrapping the port space. Fail-closed: on
+ * any inconsistency the task ends up with no granted ports.
+ */
+void cap_cache_io_ports(int pid) {
+    if (pid < 0 || pid >= MAX_TASKS) return;
+    tcb_t *t = &tasks[pid];
+    uint32_t n = 0;
+    if (t->cspace) {
+        spin_lock(&cap_lock);
+        for (uint32_t s = 0; s < t->cspace_size && n < HORUS_MAX_IO_RANGES; s++) {
+            capability_t *c = &t->cspace[s];
+            if (c->type != CAP_IO_PORT) continue;
+            if (!rust_io_port_window_ok(c->object)) continue;   /* skip malformed */
+            t->io_port_base[n]  = (uint16_t)((c->object >> 16) & 0xFFFF);
+            t->io_port_count[n] = (uint16_t)(c->object & 0xFFFF);
+            n++;
+        }
+        spin_unlock(&cap_lock);
+    }
+    t->io_range_n  = n;
+    t->has_io_caps = (n > 0);
+}
+
+/*
+ * True iff the current task holds a CAP_IRQ capability naming exactly `irq`.
+ * Least-privilege gate for SYS_IRQ_REGISTER / SYS_IRQ_ACK: a driver may bind or
+ * ack only the specific line its capability names, not merely any device line.
+ * Scans the caller's own cspace under cap_lock; fail-closed on any inconsistency.
+ */
+int caller_holds_irq_cap(int irq) {
+    int pid = get_current_task();
+    if (pid < 0 || pid >= MAX_TASKS) return 0;
+    tcb_t *t = &tasks[pid];
+    if (!t->cspace) return 0;                 /* only the boot task, no ring-3 caller */
+    int held = 0;
+    spin_lock(&cap_lock);
+    for (uint32_t s = 0; s < t->cspace_size; s++) {
+        capability_t *c = &t->cspace[s];
+        if (c->type == CAP_IRQ && (int)c->object == irq) { held = 1; break; }
+    }
+    spin_unlock(&cap_lock);
+    return held;
 }
 
 /*
