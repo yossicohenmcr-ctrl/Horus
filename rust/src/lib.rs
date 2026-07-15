@@ -25,6 +25,11 @@ mod sha256;
 mod sha512;
 mod ed25519;
 
+// Zero-dependency property/differential fuzz harness (host tests only). See
+// rust/src/fuzzrng.rs and the `fuzz_*` tests in each module's `mod tests`.
+#[cfg(test)]
+mod fuzzrng;
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -245,6 +250,54 @@ mod tests {
     const PRESENT: u32 = 1;
     const WRITE: u32 = 2;
     const USER: u32 = 4;
+
+    // ---- property fuzz (zero-dependency; see rust/src/fuzzrng.rs) ----
+
+    // Arbitrary command bytes — invalid UTF-8, embedded NULs, every length up to
+    // the buffer — must be dispatched without panicking.
+    #[test]
+    fn fuzz_handle_command_never_panics() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0x0011_B000_0001);
+        for _ in 0..50000 {
+            let len = r.below(65) as usize;
+            let mut buf = [0u8; 64];
+            r.fill(&mut buf[..len]);
+            let _ = unsafe { rust_handle_command(buf.as_ptr(), len) };
+        }
+    }
+
+    // The pure address-window / policy validators must be total (never panic)
+    // and deterministic (same inputs → same output) over arbitrary inputs.
+    #[test]
+    fn fuzz_policy_validators_total_and_deterministic() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0x0011_B000_0002);
+        for _ in 0..200000 {
+            let task_id = r.next_u32();
+            let addr32 = r.next_u32();
+            let err = r.next_u32();
+            let addr64 = r.next_u64();
+            let rights = r.next_u32();
+
+            assert_eq!(
+                rust_validate_page_fault(task_id, addr32, err),
+                rust_validate_page_fault(task_id, addr32, err)
+            );
+            assert_eq!(
+                rust_get_user_page_protection(task_id, addr32),
+                rust_get_user_page_protection(task_id, addr32)
+            );
+            assert_eq!(rust_user_page_is_noexec(addr64), rust_user_page_is_noexec(addr64));
+            assert_eq!(rust_should_demand_zero(err), rust_should_demand_zero(err));
+            assert_eq!(rust_signal_handler_addr_ok(addr32), rust_signal_handler_addr_ok(addr32));
+            let _ = rust_cow_copy_required(err & 1 == 1, err & 2 == 2, (r.next_u32() & 0xffff) as u16);
+            assert_eq!(
+                rust_validate_fs_operation(task_id, err, rights, core::ptr::null(), 0),
+                rust_validate_fs_operation(task_id, err, rights, core::ptr::null(), 0)
+            );
+        }
+    }
 
     #[test]
     fn page_fault_validation_guard_and_windows() {

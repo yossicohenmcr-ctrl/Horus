@@ -621,6 +621,40 @@ mod tests {
         Capability { typ, rights, object, badge, serial, generation, parent }
     }
 
+    // ---- property fuzz (zero-dependency; see rust/src/fuzzrng.rs) ----
+
+    // Non-escalation under random rights masks: a mint's effective rights are
+    // always exactly (requested ∩ source) and never a superset of the source's,
+    // for every random source-rights / requested-rights pair. `object` is 0 so
+    // mint skips the global lineage table — this stays free of shared state.
+    #[test]
+    fn fuzz_mint_never_escalates_rights() {
+        use crate::fuzzrng::SplitMix64;
+        let mut r = SplitMix64::new(0x00CA_9000_0001);
+        let size: u32 = 16;
+        let lo = KERNEL_RESERVED_CAPS;
+        let span = size - lo;
+        let mut next_serial: u32 = 1;
+        for _ in 0..50000 {
+            let mut cs = [cap(0, 0, 0, 0, 0, 0); 16];
+            let src_rights = r.next_u32();
+            let src_slot = lo + r.below(span);
+            let dst_slot = lo + r.below(span);
+            cs[src_slot as usize] = cap(1, src_rights, 0, 0, 1 + r.below(1_000_000), 1);
+            let requested = r.next_u32();
+            let mut ns = next_serial;
+            let ok = unsafe {
+                rust_cap_mint(cs.as_mut_ptr(), size, dst_slot, src_slot, requested, &mut ns, 0)
+            };
+            next_serial = ns;
+            if ok {
+                let got = cs[dst_slot as usize].rights;
+                assert_eq!(got, requested & src_rights, "minted rights = requested ∩ source");
+                assert_eq!(got & !src_rights, 0, "minted rights ⊆ source rights (no escalation)");
+            }
+        }
+    }
+
     /// Regression: a derived capability minted into a *second* task's cspace
     /// must be revoked (and its lineage invalidated) when the parent is revoked
     /// in the first task — the system-wide revocation invariant.
