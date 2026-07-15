@@ -351,6 +351,27 @@ run: kernel.elf
 		-monitor none -device isa-debug-exit,iobase=0x604,iosize=0x04 \
 		-net none -no-reboot -no-shutdown -cdrom boot.iso
 
+# run-tty: interactive kernel straight in the current terminal — NO graphical
+# window and NO `nc`. COM1 (the ring-3 shell) is wired to this terminal's
+# stdin/stdout via `-serial mon:stdio`, so you get the `horus login:` prompt
+# right here. Log in as  root / rootpass . Quit QEMU with  Ctrl-A x
+# (Ctrl-A c toggles the QEMU monitor). Contrast with `run`, which opens an SDL
+# window and parks the console on a socket you must `nc localhost 4445` into.
+#
+# Forces a fresh DEFAULT kernel first: a `make smoke-vboot*` run leaves a
+# VBOOT_SELFTEST kernel.elf that halts on purpose ("rejected -- halting boot")
+# and never reaches the shell, and it looks up-to-date to make. Rebuilding the
+# object + ELF sidesteps that trap without a full `clean`.
+.PHONY: run-tty
+run-tty:
+	@rm -f src/kernel/verified_boot.o kernel.elf boot.iso
+	@$(MAKE) --no-print-directory boot.iso
+	@echo "== Horus: login 'root' / 'rootpass'.  Quit QEMU: Ctrl-A x =="
+	qemu-system-x86_64 -m 512M -cpu qemu64,+aes,+rdrand,+smep,+smap -accel tcg \
+		-display none -no-reboot -no-shutdown \
+		-device isa-debug-exit,iobase=0x604,iosize=0x04 \
+		-serial mon:stdio -net none -cdrom boot.iso
+
 
 boot.iso: kernel.elf grub.cfg
 	@rm -rf isofiles
