@@ -381,10 +381,10 @@ embedded_fsserver_bin_start:
 embedded_fsserver_bin_end:
 #endif
 
-#ifdef INIT_DISK_SELFTEST
-/* disk_server: the ring-3 ATA driver, spawned by name from init to prove
- * capability-gated port I/O + the IRQ->notification bridge from ring 3. Only
- * embedded in the INIT_DISK_SELFTEST build. */
+#if defined(INIT_DISK_SELFTEST) || defined(STORAGE_RING3_DISK)
+/* disk_server: the ring-3 ATA driver, spawned by name from init. Embedded either
+ * for the INIT_DISK_SELFTEST proof or for the STORAGE_RING3_DISK block-service role
+ * (the real fs disk). */
 .align 16
 .global embedded_diskserver_bin_start
 embedded_diskserver_bin_start:

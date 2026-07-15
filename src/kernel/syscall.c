@@ -747,7 +747,11 @@ typedef struct {
     int      ctype;    /* required capability type, or SC_ANYTYPE */
 } syscall_desc_t;
 
+#ifdef STORAGE_RING3_DISK
+#define SYSCALL_TABLE_SIZE 80
+#else
 #define SYSCALL_TABLE_SIZE 78
+#endif
 
 /* ------------------------------------------------------------------------- *
  *  Capability-checked dispatch table.
@@ -854,6 +858,13 @@ static const syscall_desc_t syscall_table[SYSCALL_TABLE_SIZE] = {
      * caller_holds_irq_cap(irq) — a cap naming the exact line — itself. */
     [SYS_IRQ_REGISTER]            = { h_irq_register,           SC_NONE, 0, SC_ANYTYPE },
     [SYS_IRQ_ACK]                 = { h_irq_ack,                SC_NONE, 0, SC_ANYTYPE },
+#ifdef STORAGE_RING3_DISK
+    /* Ring-3 block backend. disk_server holds CAP_BLOCK_DEV in whatever cspace slot
+     * init delegated it to, so (like the IRQ bridge) the handler checks the cap
+     * itself rather than via a fixed table slot. */
+    [SYS_BLKDEV_REGISTER]         = { h_blkdev_register,        SC_NONE, 0, SC_ANYTYPE },
+    [SYS_BLKDEV_COMPLETE]         = { h_blkdev_complete,        SC_NONE, 0, SC_ANYTYPE },
+#endif
 };
 
 /* Compile-time guard: the table must have a slot for every syscall number, so
@@ -865,9 +876,15 @@ static const syscall_desc_t syscall_table[SYSCALL_TABLE_SIZE] = {
  * fill in. (C cannot check the function pointer itself in a static assert; a
  * still-missing entry stays NULL and fails closed at runtime, and adding an
  * entry past the array bound is already a hard compiler error.) */
+#ifdef STORAGE_RING3_DISK
+_Static_assert(SYSCALL_TABLE_SIZE == SYS_BLKDEV_COMPLETE + 1,
+               "syscall_table size must equal (highest syscall number + 1): "
+               "grow SYSCALL_TABLE_SIZE and add the new entry when adding a syscall");
+#else
 _Static_assert(SYSCALL_TABLE_SIZE == SYS_IRQ_ACK + 1,
                "syscall_table size must equal (highest syscall number + 1): "
                "grow SYSCALL_TABLE_SIZE and add the new entry when adding a syscall");
+#endif
 
 void syscall_handler(struct regs *r) {
     if (get_current_task() < MAX_TASKS) {

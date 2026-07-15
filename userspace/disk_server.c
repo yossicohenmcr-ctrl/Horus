@@ -45,7 +45,11 @@
 
 #define ATA_IRQ       14   /* primary channel */
 #define IRQ_NOTIF_SLOT 16  /* free notification slot this driver waits on */
-#define ATA_DRIVE_SEL 0xF0 /* LBA mode, SLAVE device (0xE0 would be master) */
+#ifdef STORAGE_RING3_DISK
+#define ATA_DRIVE_SEL 0xE0 /* LBA mode, MASTER device: the kernel's real fs disk */
+#else
+#define ATA_DRIVE_SEL 0xF0 /* LBA mode, SLAVE device (self-test's own scratch disk) */
+#endif
 #define SCRATCH_LBA   1    /* a sector on the dedicated slave disk image */
 
 /* Direct port I/O -- legal in ring 3 only because our CAP_IO_PORT windows opened
@@ -100,6 +104,7 @@ static int write_sector(uint32_t lba, const uint8_t *buf) {
     return 0;
 }
 
+#ifndef STORAGE_RING3_DISK
 /* Interrupt-driven read of one sector: enable the device IRQ, issue the command,
  * block on the IRQ notification, drain the data, then ack (re-unmask) the line. */
 static int read_sector_irq(uint32_t lba, uint8_t *buf) {
@@ -156,3 +161,49 @@ void _start(void) {
     report("DISK_SERVER_SELFTEST: PASS ring-3 ATA port-io + IRQ round-trip\n");
     sys_exit();
 }
+#else  /* STORAGE_RING3_DISK: the block-service role (the real fs disk) */
+
+/* Polled read of one sector (nIEN=1: no interrupts; the kernel's storaged drives
+ * us one request at a time, so a simple busy-wait is enough and needs no IRQ cap). */
+static int read_sector(uint32_t lba, uint8_t *buf) {
+    outb(ATA_CTRL, 0x02);              /* nIEN=1: device IRQ disabled */
+    if (wait_not_busy()) return -1;
+    select_lba(lba);
+    outb(ATA_COMMAND, ATA_CMD_READ);
+    if (wait_not_busy()) return -1;
+    if (inb(ATA_STATUS) & 0x01) return -1;         /* ERR */
+    for (int i = 0; i < 256; i++) {
+        uint16_t d = inw(ATA_DATA);
+        buf[i*2 + 0] = (uint8_t)(d & 0xFF);
+        buf[i*2 + 1] = (uint8_t)(d >> 8);
+    }
+    return 0;
+}
+
+/* Block-service loop. Register as the kernel's block backend, then serve one
+ * request at a time: the kernel notifies us with a badge carrying {op, lba}, we
+ * PIO 512 bytes to/from our bounce buffer, and signal completion. The kernel only
+ * ever hands us CIPHERTEXT (crypto stays in ring 0), and we touch only our granted
+ * ATA ports (no DMA), so a fault here is contained to this unprivileged task. */
+#define SVC_NOTIF_SLOT 17
+static uint8_t g_bounce[512];
+
+void _start(void) {
+    report("disk_server: starting (ring 3 block service, ATA primary master)\n");
+
+    /* total_blocks 0 -> the kernel uses its compiled-in volume geometry. */
+    if (sys_blkdev_register(g_bounce, SVC_NOTIF_SLOT, 0) != 0) {
+        report("disk_server: FAIL blkdev-register\n");
+        sys_exit();
+    }
+
+    for (;;) {
+        uint32_t badge = 0;
+        if (sys_wait_notify(SVC_NOTIF_SLOT, &badge) != 0) continue;
+        uint32_t lba = badge & 0x7FFFFFFFu;
+        int rc = (badge & 0x80000000u) ? write_sector(lba, g_bounce)
+                                       : read_sector(lba, g_bounce);
+        sys_blkdev_complete(rc);
+    }
+}
+#endif

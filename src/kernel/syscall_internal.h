@@ -150,6 +150,10 @@ void h_notify(struct regs *r);
 void h_wait_notify(struct regs *r);
 void h_irq_register(struct regs *r);
 void h_irq_ack(struct regs *r);
+#ifdef STORAGE_RING3_DISK
+void h_blkdev_register(struct regs *r);
+void h_blkdev_complete(struct regs *r);
+#endif
 /* selftest.c (test-only trace hook) */
 #ifdef PREEMPT_SELFTEST
 void h_preempt_trace(struct regs *r);

@@ -56,17 +56,33 @@ endif
 # keeps the proven in-kernel ATA path byte-for-byte. USERSPACE_CFLAGS/embed wiring
 # for disk_server is added under this flag further below.
 STORAGE_RING3_DISK ?= 0
-# STORAGED_SELFTEST=1 runs a boot-time proof of the storaged coroutine's mid-call
-# save/restore across a yield (prints STORAGED_SELFTEST: PASS); it implies the
-# storaged core. Gated off the ship kernel.
+# STORAGED_SELFTEST=1: standalone boot-time proof of the storaged coroutine's
+# mid-call save/restore across a yield (STORAGED_SELFTEST: PASS). Links the
+# coroutine core only — it does NOT turn on the disk_server feature behaviour.
 STORAGED_SELFTEST ?= 0
-ifeq ($(STORAGED_SELFTEST),1)
-CFLAGS  += -DSTORAGED_SELFTEST
+# BLKDEV_SELFTEST=1: proves the storaged<->disk_server data path (one sector
+# round-trip). Implies the feature (STORAGE_RING3_DISK) so disk_server is launched.
+BLKDEV_SELFTEST ?= 0
+ifeq ($(BLKDEV_SELFTEST),1)
+CFLAGS  += -DBLKDEV_SELFTEST
 STORAGE_RING3_DISK := 1
 endif
 ifeq ($(STORAGE_RING3_DISK),1)
 CFLAGS  += -DSTORAGE_RING3_DISK
 ASFLAGS += -DSTORAGE_RING3_DISK
+STORAGE_RING3_DISK_DEP = userspace/disk_server.bin
+endif
+ifeq ($(STORAGED_SELFTEST),1)
+CFLAGS  += -DSTORAGED_SELFTEST
+endif
+# storaged.o links for the feature OR the standalone coroutine test (dedup once).
+ifeq ($(STORAGE_RING3_DISK),1)
+NEED_STORAGED := 1
+endif
+ifeq ($(STORAGED_SELFTEST),1)
+NEED_STORAGED := 1
+endif
+ifeq ($(NEED_STORAGED),1)
 OBJS    += src/kernel/storaged.o
 endif
 
@@ -341,7 +357,7 @@ endif
 %.o: %.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-src/boot/multiboot.o: userspace/shell.bin userspace/init.bin userspace/hello.bin userspace/captest.bin userspace/fs_server.bin $(ELF_SELFTEST_DEP) $(PREEMPT_SELFTEST_DEP) $(SIGNAL_SELFTEST_DEP) $(FS_SELFTEST_DEP) $(INIT_FS_SELFTEST_DEP) $(INIT_DISK_SELFTEST_DEP) $(NEWLIB_SELFTEST_DEP) $(NOTIFY_SELFTEST_DEP) $(AP_TRAMPOLINE_DEP) $(SMP_SELFTEST_DEP) $(PROC_SELFTEST_DEP)
+src/boot/multiboot.o: userspace/shell.bin userspace/init.bin userspace/hello.bin userspace/captest.bin userspace/fs_server.bin $(ELF_SELFTEST_DEP) $(PREEMPT_SELFTEST_DEP) $(SIGNAL_SELFTEST_DEP) $(FS_SELFTEST_DEP) $(INIT_FS_SELFTEST_DEP) $(INIT_DISK_SELFTEST_DEP) $(STORAGE_RING3_DISK_DEP) $(NEWLIB_SELFTEST_DEP) $(NOTIFY_SELFTEST_DEP) $(AP_TRAMPOLINE_DEP) $(SMP_SELFTEST_DEP) $(PROC_SELFTEST_DEP)
 
 # AP startup trampoline: 16-bit real-mode code assembled with -m32 (the .code16
 # directive emits the right encodings) and linked flat at its SIPI load address
@@ -443,6 +459,9 @@ USERSPACE_CFLAGS += -DINIT_FS_SELFTEST
 endif
 ifeq ($(INIT_DISK_SELFTEST),1)
 USERSPACE_CFLAGS += -DINIT_DISK_SELFTEST
+endif
+ifeq ($(STORAGE_RING3_DISK),1)
+USERSPACE_CFLAGS += -DSTORAGE_RING3_DISK
 endif
 ifeq ($(PERSIST_SELFTEST),1)
 USERSPACE_CFLAGS += -DPERSIST_SELFTEST
@@ -643,6 +662,19 @@ smoke-storaged:
 	@$(MAKE) --no-print-directory boot.iso
 	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 \
 		REQUIRE_MARKER='STORAGED_SELFTEST: PASS' FAIL_MARKER='STORAGED_SELFTEST: FAIL' \
+		tools/smoke_test.sh boot.iso
+
+.PHONY: smoke-blkdev
+# Phase-2 proof of the storaged<->disk_server data path: with the ring-3 block
+# service active, storaged writes a sector and reads it back through disk_server
+# over the real primary-master disk (prints BLKDEV_SELFTEST: PASS).
+smoke-blkdev:
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory BLKDEV_SELFTEST=1
+	@$(MAKE) --no-print-directory boot.iso
+	@dd if=/dev/zero of=blkdev.img bs=512 count=2048 status=none
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 SMOKE_DISK=blkdev.img \
+		REQUIRE_MARKER='BLKDEV_SELFTEST: PASS' FAIL_MARKER='BLKDEV_SELFTEST: FAIL' \
 		tools/smoke_test.sh boot.iso
 
 .PHONY: smoke-disk-server

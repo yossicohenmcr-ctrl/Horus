@@ -64,7 +64,7 @@ static int launch_fs_server(void) {
     return srv;
 }
 
-#ifdef INIT_DISK_SELFTEST
+#if defined(INIT_DISK_SELFTEST) || defined(STORAGE_RING3_DISK)
 /* Launch the ring-3 disk_server and provision it purely by delegation: an
  * endpoint cap (slot 3) so it can block on the IRQ notification, plus the ATA
  * primary-channel device caps -- two CAP_IO_PORT windows, CAP_IRQ 14, and the
@@ -97,6 +97,15 @@ static int launch_shell(void) {
 }
 
 void _start(void) {
+#ifdef STORAGE_RING3_DISK
+    /* Ring-3 block driver: bring the disk_server up FIRST so it registers as the
+     * kernel's block backend (and triggers the deferred mount) before fs_server
+     * needs the store. Long-lived server — provision and leave it running. */
+    int ds = launch_disk_server();
+    if (ds < 0) report("init: WARNING disk_server provisioning failed\n");
+    else        report("init: ring-3 disk_server launched and provisioned\n");
+#endif
+
     /* Bring up the filesystem server first, so it is registered and serving by
      * the time the shell (or the test client) issues its first request. */
     int srv = launch_fs_server();

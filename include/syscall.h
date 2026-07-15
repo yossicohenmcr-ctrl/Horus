@@ -125,6 +125,10 @@ struct audit_event {
  * gated by a CAP_IRQ naming the exact line (checked in-handler). */
 #define SYS_IRQ_REGISTER       76   /* (irq, notif_slot) -> 0; deliver `irq` as a notification, unmask the line */
 #define SYS_IRQ_ACK            77   /* (irq) -> 0; re-unmask the line after the driver has serviced the device */
+/* Ring-3 block driver (STORAGE_RING3_DISK): disk_server registers as the kernel's
+ * block backend and signals completion of each request. Gated by CAP_BLOCK_DEV. */
+#define SYS_BLKDEV_REGISTER    78   /* (bounce_vaddr, notif_slot, total_blocks) -> 0; announce the driver + its 512B ciphertext bounce buffer */
+#define SYS_BLKDEV_COMPLETE    79   /* (result) -> 0; the just-notified block request is done (0 ok, <0 I/O error) */
 
 /* Signal numbers (1..31). A task registers a handler with sys_signal() (see
  * below); an unhandled signal terminates the target (default action). */
@@ -376,6 +380,21 @@ static inline int sys_irq_register(int irq, int notif_slot) {
  * delivery so it cannot re-fire until acked). Requires a CAP_IRQ naming `irq`. */
 static inline int sys_irq_ack(int irq) {
     return (int)syscall(SYS_IRQ_ACK, (uint32_t)irq, 0, 0);
+}
+
+/* Register this task as the kernel's ring-3 block backend: `bounce` is a 512-byte
+ * buffer the kernel fills (writes) / drains (reads) per request, `notif_slot` is
+ * the notification slot the driver waits on for requests, `total_blocks` the disk
+ * size it probed. Requires CAP_BLOCK_DEV. */
+static inline int sys_blkdev_register(void *bounce, int notif_slot, unsigned total_blocks) {
+    return (int)syscall(SYS_BLKDEV_REGISTER, (uint32_t)(uintptr_t)bounce,
+                        (uint32_t)notif_slot, (uint32_t)total_blocks);
+}
+
+/* Signal that the block request the kernel just notified is complete (result 0 on
+ * success, negative on I/O error). Requires CAP_BLOCK_DEV. */
+static inline int sys_blkdev_complete(int result) {
+    return (int)syscall(SYS_BLKDEV_COMPLETE, (uint32_t)result, 0, 0);
 }
 
 static inline int sys_receive_program(struct program_header *hdr_out) {

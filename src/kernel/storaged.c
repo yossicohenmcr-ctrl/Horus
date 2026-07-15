@@ -28,7 +28,10 @@
  * ata.c) build never links this file.
  */
 
-#ifdef STORAGE_RING3_DISK
+/* The coroutine core compiles for the real feature OR the standalone Phase-1
+ * coroutine self-test; the ring-3 block backend + protocol below are the feature
+ * only (STORAGE_RING3_DISK). */
+#if defined(STORAGE_RING3_DISK) || defined(STORAGED_SELFTEST)
 
 /*
  * kswitch(uint64_t *save_old_rsp, uint64_t new_rsp)
@@ -111,7 +114,105 @@ void storaged_bootstrap(void) {
     g_storaged_ready = 1;
 }
 
-#ifdef STORAGED_SELFTEST
+#ifdef STORAGE_RING3_DISK
+/* ---- ring-3 disk_server block backend + protocol ------------------------- *
+ * These read/write ops run ONLY on storaged. Each posts a {op,lba} request to the
+ * registered disk_server (a notification whose badge carries op+lba), then
+ * cooperatively blocks storaged; disk_server does the PIO against its 512-byte
+ * bounce buffer and calls SYS_BLKDEV_COMPLETE, which re-activates storaged. Only
+ * ciphertext ever crosses into the driver's memory (crypto sits above this seam).
+ */
+#define BLK_SECTOR   512
+#define BLK_OP_READ  0
+#define BLK_OP_WRITE 1
+
+static int          g_blk_task     = -1;  /* disk_server task id (-1 = none yet)   */
+static uint64_t     g_blk_bounce   = 0;   /* disk_server's 512B bounce buffer vaddr */
+static int          g_blk_slot     = -1;  /* notification slot it waits on          */
+static volatile int g_blk_result   = 0;   /* set by SYS_BLKDEV_COMPLETE             */
+static volatile int g_blk_inflight = 0;   /* a request is posted, awaiting complete */
+
+int blkdev_registered(void) { return g_blk_task > 0; }
+
+/* Copy one sector between a kernel buffer and disk_server's bounce, resolving the
+ * bounce vaddr through disk_server's address space (the h_ipc_reply_to idiom:
+ * transiently make it the current task, interrupts masked). Returns 0 on success. */
+static int blk_bounce_copy(void *kbuf, int to_bounce) {
+    if (g_blk_task <= 0 || !g_blk_bounce) return -1;
+    uint64_t fl;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    int saved = get_current_task();
+    set_current_task(g_blk_task);
+    int rc;
+    if (to_bounce) rc = copy_to_user((void *)(uintptr_t)g_blk_bounce, kbuf, BLK_SECTOR);
+    else           rc = copy_from_user(kbuf, (void *)(uintptr_t)g_blk_bounce, BLK_SECTOR);
+    set_current_task(saved);
+    if (fl & 0x200) __asm__ volatile ("sti" ::: "memory");
+    return rc;
+}
+
+/* One block op — MUST run on storaged. Post {op,lba}, cooperatively block until
+ * disk_server completes, then move the sector. Returns 0 ok, <0 on error. */
+static int ring3_blk_op(int op, uint64_t lba, void *buf) {
+    if (g_blk_task <= 0) return -1;                 /* no driver registered */
+    if (lba > 0x7FFFFFFFu) return -1;               /* badge carries a 31-bit lba */
+    if (op == BLK_OP_WRITE && blk_bounce_copy(buf, 1) != 0) return -1;
+
+    g_blk_result   = -1;
+    g_blk_inflight = 1;
+    uint32_t badge = (op == BLK_OP_WRITE ? 0x80000000u : 0u) | (uint32_t)lba;
+    sys_notify((uint32_t)g_blk_slot, badge);
+    storaged_yield();                                /* disk_server runs; COMPLETE resumes us */
+
+    if (g_blk_result != 0) return g_blk_result;
+    if (op == BLK_OP_READ && blk_bounce_copy(buf, 0) != 0) return -1;
+    return 0;
+}
+
+static int ring3_read_block(block_device_t *bd, uint64_t block, void *buf) {
+    (void)bd; return ring3_blk_op(BLK_OP_READ, block, buf);
+}
+static int ring3_write_block(block_device_t *bd, uint64_t block, const void *buf) {
+    (void)bd; return ring3_blk_op(BLK_OP_WRITE, block, (void *)buf);
+}
+block_device_t g_ring3_bd = {
+    .name = "ring3disk",
+    .total_blocks = 0,          /* filled in at registration */
+    .read_block  = ring3_read_block,
+    .write_block = ring3_write_block,
+    .private = 0,
+};
+
+static void blkdev_on_register(void);   /* phase-specific: kick a test, or mount */
+
+/* SYS_BLKDEV_REGISTER (78): disk_server announces itself as the block backend.
+ * ebx=bounce vaddr, ecx=notification slot, edx=total blocks. CAP_BLOCK_DEV gated. */
+void h_blkdev_register(struct regs *r) {
+    if (!caller_holds_blkdev_cap()) { r->eax = (uint32_t)-1; return; }
+    g_blk_task    = get_current_task();
+    g_blk_bounce  = (uint64_t)r->ebx;
+    g_blk_slot    = (int)r->ecx;
+    g_ring3_bd.total_blocks = r->edx ? r->edx : BLOCKS_PER_DISK;
+    r->eax = 0;
+    blkdev_on_register();
+}
+
+/* SYS_BLKDEV_COMPLETE (79): the just-notified request is done; resume storaged.
+ * ebx=result (0 ok, <0 I/O error). CAP_BLOCK_DEV gated + must be the driver. */
+void h_blkdev_complete(struct regs *r) {
+    if (!caller_holds_blkdev_cap() || get_current_task() != g_blk_task) {
+        r->eax = (uint32_t)-1; return;
+    }
+    r->eax = 0;
+    if (!g_blk_inflight) return;        /* nothing outstanding — ignore */
+    g_blk_result   = (int)r->ebx;
+    g_blk_inflight = 0;
+    storaged_activate();                /* resume storaged after its yield in ring3_blk_op */
+}
+#endif /* STORAGE_RING3_DISK */
+
+/* ---- storaged_main: one of three, chosen at build time ------------------- */
+#if defined(STORAGED_SELFTEST)
 /*
  * Phase-1 proof that kswitch preserves a mid-call kernel stack across a yield.
  * storaged does the first half of an "op", yields (as a real op would when it
@@ -144,12 +245,44 @@ void storaged_selftest(void) {
 
     print("STORAGED_SELFTEST: PASS coroutine save/restore across yield\n");
 }
-#else
-/* Real request loop lands here in Phase 2/3 (dequeue -> run storage op -> deliver).
- * Until then storaged just parks; nothing activates it in a non-selftest build. */
+
+#elif defined(BLKDEV_SELFTEST)
+/*
+ * Phase-2 proof of the storaged<->disk_server data path. Kicked once disk_server
+ * has registered (from blkdev_on_register): write a known sector via the ring-3
+ * backend, read it back, and verify the round-trip. Exercises the full request /
+ * cooperative-block / complete / bounce-copy cycle without the storage stack.
+ */
+static void storaged_main(void) {
+    static uint8_t wbuf[BLK_SECTOR];
+    static uint8_t rbuf[BLK_SECTOR];
+    for (int i = 0; i < BLK_SECTOR; i++) { wbuf[i] = (uint8_t)(i * 13 + 7); rbuf[i] = 0; }
+
+    int w  = ring3_blk_op(BLK_OP_WRITE, 1, wbuf);
+    int rd = ring3_blk_op(BLK_OP_READ,  1, rbuf);
+    int ok = (w == 0 && rd == 0);
+    for (int i = 0; i < BLK_SECTOR && ok; i++) if (rbuf[i] != wbuf[i]) ok = 0;
+
+    print(ok ? "BLKDEV_SELFTEST: PASS storaged<->disk_server sector round-trip\n"
+             : "BLKDEV_SELFTEST: FAIL round-trip\n");
+    for (;;) storaged_yield();            /* done — park */
+}
+
+static void blkdev_on_register(void) {
+    storaged_bootstrap();
+    storaged_activate();                  /* run the round-trip now that the driver is up */
+}
+
+#else  /* STORAGE_RING3_DISK real feature */
+/* Real request loop lands here in Phase 3 (dequeue storage request -> run the
+ * storage op on this stack -> deliver to the blocked caller). Until then it parks;
+ * blkdev_on_register triggers the deferred mount in Phase 3. */
 static void storaged_main(void) {
     for (;;) storaged_yield();
 }
-#endif /* STORAGED_SELFTEST */
+static void blkdev_on_register(void) {
+    /* Phase 3: enqueue the deferred mount job + activate storaged. */
+}
+#endif
 
-#endif /* STORAGE_RING3_DISK */
+#endif /* STORAGE_RING3_DISK || STORAGED_SELFTEST */
