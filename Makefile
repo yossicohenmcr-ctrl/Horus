@@ -118,6 +118,20 @@ ASFLAGS += -DINIT_FS_SELFTEST
 INIT_FS_SELFTEST_DEP = userspace/fsclient.bin
 endif
 
+# INIT_DISK_SELFTEST=1 is the ring-3 driver proof: ring-3 init launches the
+# userspace disk_server and delegates it the ATA secondary-channel device caps
+# (CAP_IO_PORT x2 + CAP_IRQ 15). The server drives that disk from ring 3 via the
+# TSS I/O bitmap + the IRQ->notification bridge, round-trips a scratch sector, and
+# prints DISK_SERVER_SELFTEST: PASS (asserted by `make smoke-disk-server`). Gated
+# off the ship kernel. CFLAGS reaches loader.c's embedded-binary table; ASFLAGS
+# reaches the multiboot .incbin; the USERSPACE_CFLAGS half (init.c hook) is below.
+INIT_DISK_SELFTEST ?= 0
+ifeq ($(INIT_DISK_SELFTEST),1)
+CFLAGS  += -DINIT_DISK_SELFTEST
+ASFLAGS += -DINIT_DISK_SELFTEST
+INIT_DISK_SELFTEST_DEP = userspace/disk_server.bin
+endif
+
 # PERSIST_SELFTEST=1 builds the FS self-test client in reboot-persistence mode: it
 # writes a sentinel file on the first boot (prints PERSIST_SELFTEST: WROTE) and, on
 # a later boot against the same disk image, reads it back and verifies it (prints
@@ -306,7 +320,7 @@ endif
 %.o: %.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-src/boot/multiboot.o: userspace/shell.bin userspace/init.bin userspace/hello.bin userspace/captest.bin userspace/fs_server.bin $(ELF_SELFTEST_DEP) $(PREEMPT_SELFTEST_DEP) $(SIGNAL_SELFTEST_DEP) $(FS_SELFTEST_DEP) $(INIT_FS_SELFTEST_DEP) $(NEWLIB_SELFTEST_DEP) $(NOTIFY_SELFTEST_DEP) $(AP_TRAMPOLINE_DEP) $(SMP_SELFTEST_DEP) $(PROC_SELFTEST_DEP)
+src/boot/multiboot.o: userspace/shell.bin userspace/init.bin userspace/hello.bin userspace/captest.bin userspace/fs_server.bin $(ELF_SELFTEST_DEP) $(PREEMPT_SELFTEST_DEP) $(SIGNAL_SELFTEST_DEP) $(FS_SELFTEST_DEP) $(INIT_FS_SELFTEST_DEP) $(INIT_DISK_SELFTEST_DEP) $(NEWLIB_SELFTEST_DEP) $(NOTIFY_SELFTEST_DEP) $(AP_TRAMPOLINE_DEP) $(SMP_SELFTEST_DEP) $(PROC_SELFTEST_DEP)
 
 # AP startup trampoline: 16-bit real-mode code assembled with -m32 (the .code16
 # directive emits the right encodings) and linked flat at its SIPI load address
@@ -406,6 +420,9 @@ USERSPACE_CFLAGS = -m32 -ffreestanding -fPIE -fno-plt -fno-stack-protector \
 ifeq ($(INIT_FS_SELFTEST),1)
 USERSPACE_CFLAGS += -DINIT_FS_SELFTEST
 endif
+ifeq ($(INIT_DISK_SELFTEST),1)
+USERSPACE_CFLAGS += -DINIT_DISK_SELFTEST
+endif
 ifeq ($(PERSIST_SELFTEST),1)
 USERSPACE_CFLAGS += -DPERSIST_SELFTEST
 endif
@@ -496,7 +513,7 @@ $(SHIPPED_PIE_BINS): userspace/%.bin: userspace/%.pie.elf tools/mkheadered
 # PIE (not flat) because it dereferences .rodata string literals, which on 32-bit
 # -fPIE go through the GOT and only resolve once try_elf_load applies the
 # R_386_RELATIVE relocations — the flat load path does not.
-PIE_TEST_BINS = userspace/fsclient.bin userspace/proctest.bin userspace/exectest.bin userspace/grantee.bin userspace/sigtarget.bin userspace/faulter.bin userspace/sigwaiter.bin userspace/argtest.bin userspace/notifytest.bin
+PIE_TEST_BINS = userspace/fsclient.bin userspace/proctest.bin userspace/exectest.bin userspace/grantee.bin userspace/sigtarget.bin userspace/faulter.bin userspace/sigwaiter.bin userspace/argtest.bin userspace/notifytest.bin userspace/disk_server.bin
 $(PIE_TEST_BINS): userspace/%.bin: userspace/%.pie.elf tools/mkheadered
 	@./tools/mkheadered $< $@ "$*"
 
@@ -588,6 +605,23 @@ smoke-init-fs:
 	@$(SMOKE_FS_PREP)
 	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 $(SMOKE_FS_ENV) REQUIRE_MARKER='FS_SELFTEST: PASS' \
 		FAIL_MARKER='FS_SELFTEST: FAIL' tools/smoke_test.sh boot.iso
+
+# Ring-3 driver proof: ring-3 init launches the disk_server and delegates it the
+# ATA secondary-channel device caps; the server drives that disk from ring 3 —
+# capability-gated port I/O (TSS I/O bitmap) plus the kernel's IRQ->notification
+# bridge — round-trips a scratch sector, and prints DISK_SERVER_SELFTEST: PASS.
+# The test disk (SMOKE_DISK2, IDE index 1 = primary SLAVE) is driven by the ring-3
+# server; the kernel's object store only touches the primary master, so the two
+# never contend. Single boot; a fresh zeroed image is fine (server writes, reads).
+.PHONY: smoke-disk-server
+smoke-disk-server:
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory INIT_DISK_SELFTEST=1
+	@$(MAKE) --no-print-directory boot.iso
+	@dd if=/dev/zero of=disk2.img bs=512 count=1024 status=none
+	@SMOKE_TIMEOUT=$(SMOKE_TIMEOUT) MARKER_ONLY=1 SMOKE_DISK2=disk2.img \
+		REQUIRE_MARKER='DISK_SERVER_SELFTEST: PASS' FAIL_MARKER='DISK_SERVER_SELFTEST: FAIL' \
+		tools/smoke_test.sh boot.iso
 
 # Reboot-survival test: boot twice against ONE persistent ATA disk image. Boot 1
 # writes a sentinel file (PERSIST_SELFTEST: WROTE); boot 2, on the same image,

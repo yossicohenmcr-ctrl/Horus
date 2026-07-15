@@ -39,6 +39,13 @@ static void settle(void) { for (volatile int d = 0; d < 40000; d++) { } }
 #define CAP_SLOT_STORAGE    9    /* CAP_ENCRYPTED_STORAGE (also the object-store cap)*/
 #define INIT_EP_GATE_SLOT   10   /* CAP_ENDPOINT, object 0         (coarse IPC gate) */
 #define INIT_EP_LISTEN_SLOT 11   /* CAP_ENDPOINT, object FS_EP_REQ (server listen)   */
+/* Ring-3 driver framework: the ATA primary-channel device caps init holds to
+ * delegate to the disk_server (mirrors the kernel endowment in
+ * spawn_initial_userspace_init()). */
+#define INIT_IOPORT_CMD_SLOT 12  /* CAP_IO_PORT 0x1F0..0x1F7 */
+#define INIT_IOPORT_CTL_SLOT 13  /* CAP_IO_PORT 0x3F6        */
+#define INIT_IRQ_SLOT        14  /* CAP_IRQ 14               */
+#define INIT_BLKDEV_SLOT     15  /* CAP_BLOCK_DEV            */
 
 /* Launch the userspace fs_server and provision it entirely by delegation: init
  * grants the server all four capabilities it needs — the coarse IPC gate (slot
@@ -56,6 +63,25 @@ static int launch_fs_server(void) {
     if (sys_cap_grant(srv, CAP_SLOT_STORAGE,    7) != 0) return -5;  /* object-store gate   */
     return srv;
 }
+
+#ifdef INIT_DISK_SELFTEST
+/* Launch the ring-3 disk_server and provision it purely by delegation: an
+ * endpoint cap (slot 3) so it can block on the IRQ notification, plus the ATA
+ * primary-channel device caps -- two CAP_IO_PORT windows, CAP_IRQ 14, and the
+ * CAP_BLOCK_DEV registration gate. init holds the driver's CAP_TCB from the
+ * spawn, so the grants are authorised. Returns the task id, or negative on
+ * failure. */
+static int launch_disk_server(void) {
+    int srv = sys_spawn_named("disk_server");
+    if (srv <= 0) return -1;
+    if (sys_cap_grant(srv, INIT_EP_GATE_SLOT,    3)  != 0) return -2;  /* notif gate     */
+    if (sys_cap_grant(srv, INIT_IOPORT_CMD_SLOT, 12) != 0) return -3;  /* 0x1F0..0x1F7   */
+    if (sys_cap_grant(srv, INIT_IOPORT_CTL_SLOT, 13) != 0) return -4;  /* 0x3F6          */
+    if (sys_cap_grant(srv, INIT_IRQ_SLOT,        14) != 0) return -5;  /* IRQ 14         */
+    if (sys_cap_grant(srv, INIT_BLKDEV_SLOT,     15) != 0) return -6;  /* block-dev gate */
+    return srv;
+}
+#endif
 
 /* Spawn the shell and delegate it the console + storage capabilities. Returns
  * the shell's task id, or a negative value on failure. */
@@ -76,6 +102,19 @@ void _start(void) {
     int srv = launch_fs_server();
     if (srv < 0) report("init: WARNING fs_server provisioning failed\n");
     else         report("init: fs_server launched and provisioned\n");
+
+#ifdef INIT_DISK_SELFTEST
+    /* Ring-3 driver proof: launch the disk_server by delegation alone and let it
+     * drive the ATA secondary channel from ring 3. Its DISK_SERVER_SELFTEST marker
+     * (asserted by `make smoke-disk-server`) is the proof; block until it finishes
+     * so the marker is flushed before anything else runs. */
+    report("INIT_DISK_SELFTEST: launching ring-3 disk_server by delegation\n");
+    int ds = launch_disk_server();
+    if (ds < 0) { report("DISK_SERVER_SELFTEST: FAIL provision\n"); for (;;) settle(); }
+    sys_wait(ds);
+    report("INIT_DISK_SELFTEST: disk_server exited\n");
+    for (;;) settle();
+#endif
 
 #ifdef INIT_FS_SELFTEST
     /* Boot-time FS integration test: prove init brings up fs_server by delegation

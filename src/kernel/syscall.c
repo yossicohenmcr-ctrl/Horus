@@ -625,6 +625,13 @@ static void h_cap_grant(struct regs *r) {
     tasks[target].cspace[dest_slot] = granted;
     spin_unlock(&cap_lock);
 
+    /* If this delegated a CAP_IO_PORT window, rebuild the target's cached port set
+     * so the TSS I/O-permission bitmap opens exactly those ports on its next
+     * context switch (cap_cache_io_ports takes cap_lock, hence after the unlock).
+     * This is the grant-time analogue of the cap_install_from_root refresh, and is
+     * what lets init delegate ATA ports to the disk_server it spawns. */
+    if (granted.type == CAP_IO_PORT) cap_cache_io_ports(target);
+
     audit_log(AUDIT_CAP_TRANSFER, (uint32_t)target, 0, "cap grant");
     r->eax = 0;
 }

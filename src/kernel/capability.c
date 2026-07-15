@@ -127,8 +127,17 @@ void cap_init(void) {
 
     /* Device-driver authority (ring-3 driver framework). Primordial in the root
      * cnode; init delegates these down to the disk_server with SYS_CAP_GRANT so
-     * no driver ever installs directly from root. The ATA driver needs its two
-     * PIO port windows, its IRQ line, and the block-backend registration gate. */
+     * no driver ever installs directly from root. The disk_server needs its two
+     * PIO port windows, its IRQ line, and the block-backend registration gate.
+     *
+     * These name the ATA PRIMARY channel PIO ports (0x1F0-0x1F7 / 0x3F6, IRQ14).
+     * The kernel's own object store also lives on the primary channel, but only
+     * ever drives the primary MASTER; the disk_server proof drives the primary
+     * SLAVE, on its own disk image. The kernel probes only the master at boot, so
+     * with a slave-only test disk it falls back to the RAM vdisk and never touches
+     * the driver's disk -- clean isolation on a dedicated IRQ (14). Fully evicting
+     * the primary-master driver is a later step: it needs an async block-I/O path,
+     * since the kernel can only block on a ring-3 server at a syscall boundary. */
     root_cnode[12].type   = CAP_IO_PORT;                 /* ATA command/data block */
     root_cnode[12].rights = CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_GRANT;
     root_cnode[12].object = ((uint64_t)0x1F0 << 16) | 8; /* ports 0x1F0..0x1F7 */

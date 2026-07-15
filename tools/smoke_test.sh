@@ -67,6 +67,15 @@ if [ -n "${SMOKE_DISK:-}" ]; then
     DRIVE_ARG="-drive file=$SMOKE_DISK,format=raw,if=ide,index=0,cache=writethrough"
 fi
 
+# Optional secondary ATA disk (SMOKE_DISK2=<image>): attaches it as IDE index 1,
+# i.e. the primary channel's SLAVE device (the boot cdrom already occupies the
+# secondary channel). The ring-3 disk_server self-test drives this slave disk; the
+# kernel's object store only ever drives the primary master, so the two never
+# contend, and IRQ14 is dedicated to the driver.
+if [ -n "${SMOKE_DISK2:-}" ]; then
+    DRIVE_ARG="$DRIVE_ARG -drive file=$SMOKE_DISK2,format=raw,if=ide,index=1,cache=writethrough"
+fi
+
 # SMP_CPUS=<n> boots the guest with n logical CPUs (for the SMP self-test).
 SMP_ARG=""
 if [ -n "${SMP_CPUS:-}" ]; then
