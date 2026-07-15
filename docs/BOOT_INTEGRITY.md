@@ -111,31 +111,28 @@ UEFI firmware ──verifies──▶ shim (MS-signed or MOK-enrolled)
   boot path. **Cons:** requires UEFI (Horus currently boots BIOS/Multiboot2 via
   GRUB) and key enrolment; a BIOS target gets no firmware anchor.
 
-### Phase B — self-contained signed-image verification (no UEFI dependency)
+### Phase B — self-contained signed-image verification (no UEFI dependency) — *implemented*
 
-For the current BIOS/Multiboot2 path, add a **minimal first-stage verifier**
-that runs before the kernel proper:
+This is the anchor described in [§2 "What is implemented now"](#what-is-implemented-now)
+above: for the current BIOS/Multiboot2 path, the kernel verifies its own loaded
+image against an offline-signed Ed25519 signature before proceeding.
 
-1. `release.yml` signs `kernel.elf` with an **ed25519** key held offline / in a
-   hardware token (never on a CI runner), producing a detached signature shipped
-   as a Multiboot module.
-2. A small first stage (or an extended `entry64.S` pre-`kmain` stub) verifies
-   the ed25519 signature over the loaded kernel image against a **public key
-   compiled into the first stage** before jumping to `kmain`. On mismatch it
-   halts (and, once storage is up, records to the tamper-evident audit chain).
-   The verify-or-halt call itself is already built and CI-gated
-   (`src/kernel/verified_boot.c` → `rust_ed25519_verify`); what remains is
-   feeding it the *actual loaded image bytes* and the offline-produced detached
-   signature instead of the embedded self-test manifest.
-3. **Done:** ed25519 verification (with its internal SHA-512) now lives in the
-   safe-Rust core (`rust/src/ed25519.rs`, `rust/src/sha512.rs`) — a from-scratch,
-   test-vector-gated `verify`, consistent with the crate's zero-dependency
-   policy.
+- `release.yml` signs the real `kernel.elf` bytes with an **ed25519** key held
+  offline (never on a CI runner) and ships the enforcing `kernel.vboot.elf`.
+- Under `VBOOT_ENFORCE` the kernel verifies the signature over the **actual
+  loaded image bytes** against a **public key compiled into the image** before
+  further init, and **halts** on mismatch. Ed25519 (with its internal SHA-512)
+  lives in the safe-Rust core (`rust/src/ed25519.rs`, `rust/src/sha512.rs`) — a
+  from-scratch, test-vector-gated `verify`, consistent with the crate's
+  zero-dependency policy. Accept + tamper-reject are CI-gated by
+  `make smoke-vboot-image`.
 
-- **Root of trust:** the embedded public key in the first stage — only as strong
-  as the first stage's own integrity (write-protected boot medium, or Phase A
-  underneath). **Pros:** works on BIOS; small, auditable. **Cons:** weaker root
-  than firmware Secure Boot unless the first stage is itself protected.
+- **Root of trust:** the embedded public key — only as strong as the image's own
+  integrity (write-protected boot medium, or Phase A underneath). **Pros:** works
+  on BIOS; small, auditable. **Cons:** weaker root than firmware Secure Boot
+  unless the image itself is protected, and the anchor sits inside the image it
+  guards (so it stops tamper-without-re-sign, not an attacker who can rewrite the
+  anchor). Hardware-rooting it is Phase A / C.
 
 ### Phase C — measured boot + remote attestation (defence in depth)
 
@@ -148,11 +145,18 @@ that runs before the kernel proper:
 
 ### Sequencing
 
-Phase B is the smallest self-contained increment for the current BIOS target and
-reuses the existing crypto core; Phase A is the strongest anchor once a UEFI
-target exists; Phase C composes with either and ties back into the audit-log
-threat model. The Phase B **verifier** (Ed25519 verify-or-halt) is now built and
-CI-gated; the remaining work is anchoring it to the shipped image (offline
-signing in `release.yml` + a pre-`kmain` stage that verifies the real loaded
-bytes) and, above that, Phase A/C. This document remains the design of record for
-that anchoring so the work is scoped rather than improvised.
+Phase B — self-contained Ed25519 verify-or-halt over the real signed image — is
+**implemented and CI-gated** (see §2). It is the smallest self-contained increment
+for the current BIOS target and reuses the existing crypto core. The work still
+ahead is strengthening the *root* of that anchor and its *coverage*:
+
+- **Phase A** (UEFI Secure Boot) is the strongest anchor once a UEFI target
+  exists — it roots trust in firmware rather than in a key inside the image.
+- **Phase C** (measured boot + TPM attestation) composes with either and ties
+  back into the audit-log threat model.
+- **Coverage:** extend the hashed region to `.data` by running the verify before
+  any writable-global mutation (a pre-`kmain` stub) — a natural Phase A/C
+  companion.
+
+This document remains the design of record for that work so it is scoped rather
+than improvised.

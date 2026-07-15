@@ -28,9 +28,9 @@
 - [ ] Security scans (`make security`) reviewed; no new high-severity findings
 
 ## Checklist
-- [ ] I have read `docs/ARCHITECTURE.md`, `docs/LIMITATIONS.md`, and `CONTRIBUTING.md`
+- [ ] I have read `docs/ARCHITECTURE.md`, `SECURITY.md`, and `CONTRIBUTING.md`
 - [ ] Changes to security-critical paths include explicit explanation of invariants preserved
-- [ ] Documentation updated (`docs/ARCHITECTURE.md`, `docs/SYSCALLS.md` for a new syscall, `docs/LIMITATIONS.md`, code comments)
+- [ ] Documentation updated (`docs/ARCHITECTURE.md`, `docs/SYSCALLS.md` for a new syscall, `SECURITY.md` for a status/limitation change, `TESTS.md` if the test/CI-job count changed, code comments)
 - [ ] No new external dependencies introduced without justification
 - [ ] This PR does not increase the C unsafe surface or add `unsafe` in the logic of `rust/src/capability.rs`, `memory.rs`, or `lib.rs`
 
