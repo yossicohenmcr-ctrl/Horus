@@ -30,8 +30,7 @@ rust/src/crypto.rs              @yossicohenmcr-ctrl
 SECURITY.md                     @yossicohenmcr-ctrl
 CONTRIBUTING.md                 @yossicohenmcr-ctrl
 docs/ARCHITECTURE.md            @yossicohenmcr-ctrl
-docs/LIMITATIONS.md             @yossicohenmcr-ctrl
-docs/SECURITY.md                @yossicohenmcr-ctrl
+docs/BOOT_INTEGRITY.md          @yossicohenmcr-ctrl
 
 # Build system and reproducibility
 Makefile                        @yossicohenmcr-ctrl

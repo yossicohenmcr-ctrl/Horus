@@ -49,6 +49,5 @@ assignees: yossicohenmcr-ctrl
 ---
 
 **References**
-- SECURITY.md (vulnerability disclosure process)
-- docs/LIMITATIONS.md (known issues that are out of scope for new reports)
+- SECURITY.md (vulnerability disclosure process, and the "Known limitations & current status" section for issues already out of scope)
 - CONTRIBUTING.md (how security changes are reviewed)

@@ -7,8 +7,10 @@ This folder contains technical documentation for the Horus microkernel.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design philosophy, subsystem internals, capability model, task/process model, scheduling, signals, SMP, memory layout, Rust integration |
 | [SYSCALLS.md](SYSCALLS.md) | Per-syscall reference (0–75): numbers, capability requirements, and notes |
 | [BUILDING.md](BUILDING.md) | Toolchain requirements, build targets, build flags, QEMU setup, troubleshooting |
-| [LIMITATIONS.md](LIMITATIONS.md) | Honest account of what works, what is partial, and known security gaps |
+| [BOOT_INTEGRITY.md](BOOT_INTEGRITY.md) | Build provenance (Sigstore) and runtime verified boot (Ed25519 self-verify + halt) |
 | [ROADMAP.md](ROADMAP.md) | Forward-looking milestones and open contribution areas |
+
+The candid, subsystem-by-subsystem account of what works, what is partial, and the known security gaps lives in [SECURITY.md](../SECURITY.md#known-limitations--current-status) at the repository root.
 
 Formal specifications:
 
@@ -32,7 +34,7 @@ Project-level documents (at the repository root):
 | Document | Contents |
 |---|---|
 | [README.md](../README.md) | Build quick start, status-at-a-glance table, project overview |
-| [SECURITY.md](../SECURITY.md) | Security policy, current posture, hardening in place, reporting |
+| [SECURITY.md](../SECURITY.md) | Security policy, posture, hardening, known limitations, threat model, reporting |
 | [TESTS.md](../TESTS.md) | Test coverage today (84 Rust unit tests, 22 CI jobs) and what is still needed — the source of truth for both counts |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up and submit work |
-| [CHANGES.md](../CHANGES.md) | Changelog (`main` branch state) |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up and submit work, code style, and change-control policy |
+| [CHANGELOG.md](../CHANGELOG.md) | Release history |
