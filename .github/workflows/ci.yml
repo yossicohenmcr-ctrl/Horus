@@ -31,7 +31,7 @@ jobs:
     name: Rust unit tests + clippy (deny-warnings gate)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install clippy component
         run: rustup component add clippy
       # --locked: fail if Cargo.lock is out of date w.r.t. Cargo.toml, so a
@@ -50,7 +50,7 @@ jobs:
     name: Build kernel.elf + bootable ISO (x86_64)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain
         run: |
           sudo apt-get update
@@ -87,7 +87,7 @@ jobs:
           - DEBUG_SHELL=1
           - MINIMAL_SECURE=1
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain
         run: |
           sudo apt-get update
@@ -102,7 +102,7 @@ jobs:
     name: QEMU smoke-boot (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -119,7 +119,7 @@ jobs:
     name: QEMU ELF-loader W^X self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -136,7 +136,7 @@ jobs:
     name: QEMU preemptive-scheduling self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -153,7 +153,7 @@ jobs:
     name: QEMU signal-handling self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -170,7 +170,7 @@ jobs:
     name: QEMU SMP self-test (headless, -smp 4)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -187,7 +187,7 @@ jobs:
     name: QEMU process-control self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -204,7 +204,7 @@ jobs:
     name: QEMU async-notification self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -221,7 +221,7 @@ jobs:
     name: QEMU Ed25519 verified-boot (manifest self-test + real signed image, headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU + openssl
         run: |
           sudo apt-get update
@@ -240,7 +240,7 @@ jobs:
     name: Scripted integration session (headless, drives the real shell)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -257,7 +257,7 @@ jobs:
     name: QEMU filesystem self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -274,7 +274,7 @@ jobs:
     name: QEMU filesystem permissions self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -291,7 +291,7 @@ jobs:
     name: QEMU filesystem multi-client concurrency self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -308,7 +308,7 @@ jobs:
     name: QEMU filesystem persistence self-test (two-boot, headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -325,7 +325,7 @@ jobs:
     name: QEMU filesystem journal crash-recovery self-test (two-boot, headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -342,7 +342,7 @@ jobs:
     name: QEMU large-file (double-indirect) self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -359,7 +359,7 @@ jobs:
     name: QEMU newlib libc self-test (headless)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain + QEMU
         run: |
           sudo apt-get update
@@ -386,7 +386,7 @@ jobs:
     name: Verify reproducible kernel build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Install build toolchain
         run: |
           sudo apt-get update
@@ -419,7 +419,7 @@ jobs:
     name: Security scans + SBOM (gitleaks + Semgrep ERROR block; rest advisory)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0   # needed for gitleaks full history scan
 
@@ -473,7 +473,7 @@ jobs:
     name: TLA+ model checking (cap algebra + paging isolation)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       # A JRE from the distro repos (same apt discipline as cppcheck/flawfinder);
       # tla2tools.jar is fetched and SHA-256-verified by the Makefile target.
